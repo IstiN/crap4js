@@ -48,6 +48,7 @@
 import path from 'node:path';
 import { analyze } from './analyzer.js';
 import { formatReport } from './report.js';
+import { buildBaseline, compareBaseline, formatComparison, readBaseline, writeBaseline } from './baseline.js';
 import { changedFiles, expandPaths, findSourceFiles } from './files.js';
 import { runTests } from './runtests.js';
 import { runFileNaming } from './fileNaming.js';
@@ -82,6 +83,10 @@ function usage() {
     '  crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;',
     '                           the chosen value feeds the CRAP formula',
     '  crap4js --run-tests      Run the test+coverage suite before analyzing',
+    '  crap4js --baseline <f>   Ratchet: fail if any function\'s CRAP grew vs the baseline',
+    '                           or a function not in it exceeds --threshold',
+    '  crap4js --baseline <f> --write-baseline',
+    '                           Record the current per-function CRAP as the baseline',
     '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
     '                           Run instrumented tests and report per-function timing',
     '  crap4js file-naming [paths...]',
@@ -160,6 +165,7 @@ const SIMPLE_FLAGS = {
   '-h': 'help',
   '--changed': 'changed',
   '--run-tests': 'runTests',
+  '--write-baseline': 'writeBaseline',
 };
 
 function parseArgs(argv) {
@@ -182,6 +188,8 @@ function newOpts() {
     threshold: undefined,
     metric: undefined,
     runTests: false,
+    baseline: undefined,
+    writeBaseline: false,
   };
 }
 
@@ -195,6 +203,7 @@ function applyArg(opts, argv, i) {
   if (isFlag(a, '--coverage')) return takeValue(opts, 'coverage', a, argv, i);
   if (isFlag(a, '--threshold')) return takeValue(opts, 'threshold', a, argv, i);
   if (isFlag(a, '--metric')) return takeValue(opts, 'metric', a, argv, i);
+  if (isFlag(a, '--baseline')) return takeValue(opts, 'baseline', a, argv, i);
   if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
   opts.paths.push(a);
   return i;
@@ -219,6 +228,9 @@ function takeValue(opts, key, a, argv, i) {
 function validateOpts(opts) {
   if (opts.changed && opts.paths.length > 0) {
     throw new Error('--changed cannot be combined with explicit paths');
+  }
+  if (opts.writeBaseline && !opts.baseline) {
+    throw new Error('--write-baseline requires --baseline <file>');
   }
 }
 
@@ -295,7 +307,30 @@ function runWithOpts(opts, ctx) {
       metric: opts.metricValue,
     }),
   );
+  if (opts.baseline) return baselineVerdict(metrics, opts, ctx);
   return reportVerdict(metrics, opts.thresholdValue, ctx);
+}
+
+// Ratchet mode: per-function comparison replaces the max-CRAP threshold for
+// known functions; the threshold still applies to functions the baseline
+// has never seen. --write-baseline records the current state and passes.
+function baselineVerdict(metrics, opts, ctx) {
+  const file = path.resolve(ctx.cwd, opts.baseline);
+  if (opts.writeBaseline) {
+    const doc = buildBaseline(metrics);
+    writeBaseline(file, doc);
+    ctx.out.write(`Baseline written: ${opts.baseline} (${Object.keys(doc.functions).length} functions, max ${doc.maxCrap})\n`);
+    return 0;
+  }
+  const baseline = tryStep(ctx, () => readBaseline(file));
+  if (baseline === FAIL) return 1;
+  const result = compareBaseline(metrics, baseline, opts.thresholdValue);
+  ctx.out.write(formatComparison(result, opts.thresholdValue));
+  if (result.regressions.length || result.newOverThreshold.length) {
+    ctx.err.write('CRAP ratchet failed: CRAP may only decrease.\n');
+    return 2;
+  }
+  return 0;
 }
 
 function resolveCoveragePath(opts, cwd) {

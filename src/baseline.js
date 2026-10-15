@@ -1,0 +1,107 @@
+// CRAP baseline ratchet.
+//
+// A baseline is a JSON snapshot of per-function CRAP scores. Comparing a fresh
+// analysis against it lets a project freeze today's debt and only ever go down:
+//   - a function present in the baseline fails if its CRAP grows (beyond a
+//     small epsilon that absorbs float noise);
+//   - a function absent from the baseline (new or renamed) fails if its CRAP
+//     exceeds the threshold;
+//   - functions whose CRAP dropped are reported as improvements.
+//
+// Keys are `file::name`; duplicate names within a file get a `#n` suffix in
+// source order, so the key survives line shifts but not reordering of
+// same-named functions (acceptable — those are rare and fail safe as "new").
+
+import { readFileSync, writeFileSync } from 'node:fs';
+
+export const BASELINE_VERSION = 1;
+const EPSILON = 0.05;
+
+/** Stable key per metric: file::name with #n for repeated names in a file. */
+export function keyMetrics(metrics) {
+  const byFile = new Map();
+  const sorted = [...metrics].sort((a, b) =>
+    a.file === b.file ? a.startLine - b.startLine : a.file < b.file ? -1 : 1,
+  );
+  const out = [];
+  for (const m of sorted) {
+    const seen = byFile.get(m.file) || new Map();
+    byFile.set(m.file, seen);
+    const n = seen.get(m.methodName) || 0;
+    seen.set(m.methodName, n + 1);
+    out.push({ key: `${m.file}::${m.methodName}${n ? `#${n + 1}` : ''}`, metric: m });
+  }
+  return out;
+}
+
+const round = (x) => Math.round(x * 10) / 10;
+
+/** Builds the baseline document from analyzed metrics (numeric CRAP only). */
+export function buildBaseline(metrics) {
+  const functions = {};
+  let max = 0;
+  for (const { key, metric } of keyMetrics(metrics)) {
+    if (metric.crapScore == null) continue;
+    functions[key] = round(metric.crapScore);
+    if (metric.crapScore > max) max = metric.crapScore;
+  }
+  const sortedKeys = Object.keys(functions).sort();
+  const ordered = {};
+  for (const k of sortedKeys) ordered[k] = functions[k];
+  return { version: BASELINE_VERSION, maxCrap: round(max), functions: ordered };
+}
+
+export function readBaseline(path) {
+  const doc = JSON.parse(readFileSync(path, 'utf8'));
+  if (!doc || typeof doc.functions !== 'object') {
+    throw new Error(`Invalid baseline file ${path}: missing "functions"`);
+  }
+  return doc;
+}
+
+export function writeBaseline(path, doc) {
+  writeFileSync(path, JSON.stringify(doc, null, 2) + '\n');
+}
+
+/**
+ * Compares metrics against a baseline.
+ * @returns {{ regressions: object[], newOverThreshold: object[], improvements: object[], removed: string[] }}
+ */
+export function compareBaseline(metrics, baseline, threshold) {
+  const regressions = [];
+  const newOverThreshold = [];
+  const improvements = [];
+  const present = new Set();
+  for (const { key, metric } of keyMetrics(metrics)) {
+    if (metric.crapScore == null) continue;
+    present.add(key);
+    const score = round(metric.crapScore);
+    const before = baseline.functions[key];
+    if (before === undefined) {
+      if (score > threshold) newOverThreshold.push({ key, score });
+    } else if (score > before + EPSILON) {
+      regressions.push({ key, before, score });
+    } else if (score < before - EPSILON) {
+      improvements.push({ key, before, score });
+    }
+  }
+  const removed = Object.keys(baseline.functions).filter((k) => !present.has(k));
+  return { regressions, newOverThreshold, improvements, removed };
+}
+
+/** Human-readable ratchet verdict block. */
+export function formatComparison(result, threshold) {
+  const lines = ['', 'CRAP Ratchet', '============'];
+  const { regressions, newOverThreshold, improvements, removed } = result;
+  for (const r of regressions) lines.push(`REGRESSION  ${r.key}: ${r.before} -> ${r.score}`);
+  for (const n of newOverThreshold) lines.push(`NEW > ${threshold}  ${n.key}: ${n.score}`);
+  for (const i of improvements) lines.push(`improved    ${i.key}: ${i.before} -> ${i.score}`);
+  lines.push(
+    `${regressions.length} regression(s), ${newOverThreshold.length} new over threshold, ` +
+      `${improvements.length} improvement(s), ${removed.length} removed`,
+  );
+  if (!regressions.length && !newOverThreshold.length && (improvements.length || removed.length)) {
+    lines.push('Ratchet passed with improvements — re-run with --write-baseline to lock them in.');
+  }
+  return lines.join('\n') + '\n';
+}
