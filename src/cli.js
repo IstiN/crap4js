@@ -48,7 +48,7 @@
 import path from 'node:path';
 import { analyze } from './analyzer.js';
 import { formatReport } from './report.js';
-import { buildBaseline, compareBaseline, formatComparison, readBaseline, writeBaseline } from './baseline.js';
+import { buildBaseline, compareBaseline, formatComparison, ratchetDown, readBaseline, writeBaseline } from './baseline.js';
 import { changedFiles, expandPaths, findSourceFiles } from './files.js';
 import { runTests } from './runtests.js';
 import { runFileNaming } from './fileNaming.js';
@@ -85,6 +85,8 @@ function usage() {
     '  crap4js --run-tests      Run the test+coverage suite before analyzing',
     '  crap4js --baseline <f>   Ratchet: fail if any function\'s CRAP grew vs the baseline',
     '                           or a function not in it exceeds --threshold',
+    '  crap4js --baseline <f> --update-baseline',
+    '                           Ratchet the baseline DOWN (never up); fails without writing on a regression',
     '  crap4js --baseline <f> --write-baseline',
     '                           Record per-function CRAP above --threshold as the baseline',
     '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
@@ -166,6 +168,7 @@ const SIMPLE_FLAGS = {
   '--changed': 'changed',
   '--run-tests': 'runTests',
   '--write-baseline': 'writeBaseline',
+  '--update-baseline': 'updateBaseline',
 };
 
 function parseArgs(argv) {
@@ -190,6 +193,7 @@ function newOpts() {
     runTests: false,
     baseline: undefined,
     writeBaseline: false,
+    updateBaseline: false,
   };
 }
 
@@ -229,8 +233,11 @@ function validateOpts(opts) {
   if (opts.changed && opts.paths.length > 0) {
     throw new Error('--changed cannot be combined with explicit paths');
   }
-  if (opts.writeBaseline && !opts.baseline) {
-    throw new Error('--write-baseline requires --baseline <file>');
+  if ((opts.writeBaseline || opts.updateBaseline) && !opts.baseline) {
+    throw new Error('--write-baseline / --update-baseline require --baseline <file>');
+  }
+  if (opts.writeBaseline && opts.updateBaseline) {
+    throw new Error('--write-baseline and --update-baseline are mutually exclusive');
   }
 }
 
@@ -324,12 +331,31 @@ function baselineVerdict(metrics, opts, ctx) {
   }
   const baseline = tryStep(ctx, () => readBaseline(file));
   if (baseline === FAIL) return 1;
+  if (opts.updateBaseline) return updateVerdict(metrics, baseline, file, opts, ctx);
   const result = compareBaseline(metrics, baseline, opts.thresholdValue);
   ctx.out.write(formatComparison(result, opts.thresholdValue));
   if (result.regressions.length || result.newOverThreshold.length) {
     ctx.err.write('CRAP ratchet failed: CRAP may only decrease.\n');
     return 2;
   }
+  return 0;
+}
+
+// --update-baseline: ratchet the file down after a merge. A regression (or a new function over the
+// threshold) blocks the update and fails, so a red main never silently lowers the bar's evidence.
+function updateVerdict(metrics, baseline, file, opts, ctx) {
+  const r = ratchetDown(metrics, baseline, opts.thresholdValue);
+  ctx.out.write(formatComparison(r.result, opts.thresholdValue));
+  if (r.blocked) {
+    ctx.err.write('CRAP ratchet failed: baseline NOT updated.\n');
+    return 2;
+  }
+  if (!r.changed) {
+    ctx.out.write('Baseline unchanged.\n');
+    return 0;
+  }
+  writeBaseline(file, r.doc);
+  ctx.out.write(`Baseline updated: ${Object.keys(r.doc.functions).length} functions (was ${Object.keys(baseline.functions).length}), max ${r.doc.maxCrap} (was ${baseline.maxCrap})\n`);
   return 0;
 }
 

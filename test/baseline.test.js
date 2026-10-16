@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { buildBaseline, compareBaseline, keyMetrics, formatComparison } from '../src/baseline.js';
+import { buildBaseline, compareBaseline, keyMetrics, formatComparison, ratchetDown } from '../src/baseline.js';
 import { main } from '../src/cli.js';
 
 const m = (file, methodName, startLine, crapScore) => ({ file, methodName, startLine, crapScore });
@@ -95,4 +95,44 @@ test('cli entrypoint delivers the full report and the ratchet verdict through a 
   const r = spawnSync('sh', ['-c', `"${process.execPath}" "${cli}" --baseline b.json | cat`], { cwd: dir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   assert.match(r.stdout, /CRAP Ratchet/);
   assert.match(r.stdout, /0 regression\(s\)/);
+});
+
+test('ratchetDown keeps min(old, now), drops fixed/removed functions and never adds', () => {
+  const baseline = { version: 1, maxCrap: 50, functions: { 'a.js::big': 50, 'a.js::mid': 20, 'a.js::fixed': 12, 'a.js::gone': 9 } };
+  const r = ratchetDown([m('a.js', 'big', 1, 40), m('a.js', 'mid', 5, 20.3), m('a.js', 'fixed', 9, 3), m('a.js', 'ok', 30, 2)], baseline, 8);
+  assert.equal(r.blocked, false);
+  assert.deepEqual(r.doc.functions, { 'a.js::big': 40, 'a.js::mid': 20 });
+  assert.equal(r.doc.maxCrap, 40);
+  assert.equal(r.changed, true);
+});
+
+test('ratchetDown is blocked by a regression or a new function over the threshold', () => {
+  const baseline = { version: 1, maxCrap: 20, functions: { 'a.js::f': 20 } };
+  assert.equal(ratchetDown([m('a.js', 'f', 1, 25)], baseline, 8).blocked, true);
+  assert.equal(ratchetDown([m('a.js', 'f', 1, 20), m('a.js', 'n', 9, 12)], baseline, 8).blocked, true);
+  const same = ratchetDown([m('a.js', 'f', 1, 20)], baseline, 8);
+  assert.equal(same.blocked, false);
+  assert.equal(same.changed, false);
+});
+
+test('cli --update-baseline lowers the file after an improvement and refuses after a regression', () => {
+  const dir = project(BRANCHY);
+  assert.equal(main(['--baseline', 'b.json', '--write-baseline', '--threshold', '0'], { cwd: dir, out: sink(), err: sink() }), 0);
+  const before = JSON.parse(readFileSync(path.join(dir, 'b.json'), 'utf8'));
+  writeFileSync(path.join(dir, 'src', 'a.js'), SIMPLE);
+  const out = sink();
+  assert.equal(main(['--baseline', 'b.json', '--update-baseline', '--threshold', '0'], { cwd: dir, out, err: sink() }), 0);
+  const after = JSON.parse(readFileSync(path.join(dir, 'b.json'), 'utf8'));
+  assert.ok(after.functions['src/a.js::f'] < before.functions['src/a.js::f']);
+  assert.match(out.text, /Baseline updated/);
+  writeFileSync(path.join(dir, 'src', 'a.js'), BRANCHY);
+  const err = sink();
+  assert.equal(main(['--baseline', 'b.json', '--update-baseline', '--threshold', '0'], { cwd: dir, out: sink(), err }), 2);
+  assert.match(err.text, /NOT updated/);
+  assert.deepEqual(JSON.parse(readFileSync(path.join(dir, 'b.json'), 'utf8')), after);
+});
+
+test('cli: --update-baseline needs --baseline and excludes --write-baseline', () => {
+  assert.equal(main(['--update-baseline'], { cwd: project(SIMPLE), out: sink(), err: sink() }), 1);
+  assert.equal(main(['--baseline', 'b.json', '--update-baseline', '--write-baseline'], { cwd: project(SIMPLE), out: sink(), err: sink() }), 1);
 });

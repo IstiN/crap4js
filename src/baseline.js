@@ -114,3 +114,32 @@ export function formatComparison(result, threshold) {
   }
   return lines.join('\n') + '\n';
 }
+
+/**
+ * Ratchets a baseline DOWN. Blocked (nothing to write) when the code regressed against it or has a
+ * new function over the threshold. Otherwise each remaining function keeps min(old, now) — jitter
+ * inside the compare epsilon never raises it — and functions that are gone or now at/below the
+ * threshold are dropped (the threshold holds them). Never adds an entry.
+ *
+ * @returns {{ blocked: boolean, result: object, doc?: object, changed?: boolean }}
+ */
+export function ratchetDown(metrics, baseline, threshold) {
+  const result = compareBaseline(metrics, baseline, threshold);
+  if (result.regressions.length || result.newOverThreshold.length) return { blocked: true, result };
+  const current = new Map();
+  for (const { key, metric } of keyMetrics(metrics)) {
+    if (metric.crapScore != null) current.set(key, round(metric.crapScore));
+  }
+  const functions = {};
+  let max = 0;
+  for (const key of Object.keys(baseline.functions).sort()) {
+    const now = current.get(key);
+    if (now === undefined || now <= threshold) continue;
+    const value = Math.min(baseline.functions[key], now);
+    functions[key] = value;
+    if (value > max) max = value;
+  }
+  const doc = { version: BASELINE_VERSION, maxCrap: round(max), functions };
+  const changed = JSON.stringify(doc.functions) !== JSON.stringify(baseline.functions);
+  return { blocked: false, result, doc, changed };
+}
