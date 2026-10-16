@@ -86,7 +86,7 @@ function usage() {
     '  crap4js --baseline <f>   Ratchet: fail if any function\'s CRAP grew vs the baseline',
     '                           or a function not in it exceeds --threshold',
     '  crap4js --baseline <f> --write-baseline',
-    '                           Record the current per-function CRAP as the baseline',
+    '                           Record per-function CRAP above --threshold as the baseline',
     '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
     '                           Run instrumented tests and report per-function timing',
     '  crap4js file-naming [paths...]',
@@ -317,7 +317,7 @@ function runWithOpts(opts, ctx) {
 function baselineVerdict(metrics, opts, ctx) {
   const file = path.resolve(ctx.cwd, opts.baseline);
   if (opts.writeBaseline) {
-    const doc = buildBaseline(metrics);
+    const doc = buildBaseline(metrics, opts.thresholdValue);
     writeBaseline(file, doc);
     ctx.out.write(`Baseline written: ${opts.baseline} (${Object.keys(doc.functions).length} functions, max ${doc.maxCrap})\n`);
     return 0;

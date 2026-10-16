@@ -37,14 +37,22 @@ export function keyMetrics(metrics) {
 
 const round = (x) => Math.round(x * 10) / 10;
 
-/** Builds the baseline document from analyzed metrics (numeric CRAP only). */
-export function buildBaseline(metrics) {
+/**
+ * Builds the baseline document from analyzed metrics (numeric CRAP only).
+ *
+ * With a `threshold` only functions ABOVE it are recorded: a function that is absent from the
+ * baseline is already held to `--threshold` by the ratchet, so recording the (thousands of)
+ * compliant ones adds size and merge conflicts without adding protection. Trade-off: a compliant
+ * function may drift up to the threshold; omit the threshold to ratchet every function.
+ */
+export function buildBaseline(metrics, threshold) {
   const functions = {};
   let max = 0;
   for (const { key, metric } of keyMetrics(metrics)) {
     if (metric.crapScore == null) continue;
-    functions[key] = round(metric.crapScore);
     if (metric.crapScore > max) max = metric.crapScore;
+    if (threshold != null && metric.crapScore <= threshold) continue;
+    functions[key] = round(metric.crapScore);
   }
   const sortedKeys = Object.keys(functions).sort();
   const ordered = {};

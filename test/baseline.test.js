@@ -19,6 +19,15 @@ test('buildBaseline skips N/A scores and records the max', () => {
   assert.equal(b.maxCrap, 12.3);
 });
 
+test('buildBaseline with a threshold records only functions above it (compliant ones are held by the threshold)', () => {
+  const b = buildBaseline([m('a.js', 'big', 1, 30), m('a.js', 'edge', 9, 8), m('a.js', 'small', 20, 2)], 8);
+  assert.deepEqual(b.functions, { 'a.js::big': 30 });
+  assert.equal(b.maxCrap, 30);
+  const r = compareBaseline([m('a.js', 'big', 1, 30), m('a.js', 'small', 20, 7), m('a.js', 'grown', 30, 9)], b, 8);
+  assert.deepEqual(r.newOverThreshold, [{ key: 'a.js::grown', score: 9 }]);
+  assert.equal(r.regressions.length, 0);
+});
+
 test('compareBaseline flags growth, new-over-threshold, improvements and removals', () => {
   const baseline = { functions: { 'a.js::f': 10, 'a.js::g': 50, 'a.js::gone': 4 } };
   const r = compareBaseline([m('a.js', 'f', 1, 12), m('a.js', 'g', 9, 40), m('a.js', 'n', 20, 9), m('a.js', 'ok', 30, 2)], baseline, 8);
@@ -59,13 +68,14 @@ const BRANCHY = 'export function f(x) { if (x) { if (x > 1) { return 1; } return
 test('cli: --write-baseline records, unchanged code passes, worse code fails with 2', () => {
   const dir = project(SIMPLE);
   const out = sink();
-  assert.equal(main(['--baseline', 'crap-baseline.json', '--write-baseline'], { cwd: dir, out, err: sink() }), 0);
+  // threshold 0 => every function is recorded (full ratchet); the default threshold would skip the compliant f
+  assert.equal(main(['--baseline', 'crap-baseline.json', '--write-baseline', '--threshold', '0'], { cwd: dir, out, err: sink() }), 0);
   const doc = JSON.parse(readFileSync(path.join(dir, 'crap-baseline.json'), 'utf8'));
   assert.ok('src/a.js::f' in doc.functions);
-  assert.equal(main(['--baseline', 'crap-baseline.json'], { cwd: dir, out: sink(), err: sink() }), 0);
+  assert.equal(main(['--baseline', 'crap-baseline.json', '--threshold', '0'], { cwd: dir, out: sink(), err: sink() }), 0);
   writeFileSync(path.join(dir, 'src', 'a.js'), BRANCHY);
   const err = sink();
-  assert.equal(main(['--baseline', 'crap-baseline.json'], { cwd: dir, out: sink(), err }), 2);
+  assert.equal(main(['--baseline', 'crap-baseline.json', '--threshold', '0'], { cwd: dir, out: sink(), err }), 2);
   assert.match(err.text, /may only decrease/);
 });
 
