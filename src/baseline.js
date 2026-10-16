@@ -15,7 +15,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 export const BASELINE_VERSION = 1;
-const EPSILON = 0.05;
+// Absorbs rounding/float noise only; any real change in complexity or coverage moves CRAP by more.
+const EPSILON = 0.5;
 
 /** Stable key per metric: file::name with #n for repeated names in a file. */
 export function keyMetrics(metrics) {

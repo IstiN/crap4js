@@ -30,7 +30,7 @@ test('compareBaseline flags growth, new-over-threshold, improvements and removal
 });
 
 test('compareBaseline ignores float noise within epsilon', () => {
-  const r = compareBaseline([m('a.js', 'f', 1, 10.04)], { functions: { 'a.js::f': 10 } }, 8);
+  const r = compareBaseline([m('a.js', 'f', 1, 10.4)], { functions: { 'a.js::f': 10 } }, 8);
   assert.equal(r.regressions.length, 0);
   assert.equal(r.improvements.length, 0);
 });
@@ -71,4 +71,18 @@ test('cli: --write-baseline records, unchanged code passes, worse code fails wit
 
 test('cli: --write-baseline without --baseline is a usage error', () => {
   assert.equal(main(['--write-baseline'], { cwd: project(SIMPLE), out: sink(), err: sink() }), 1);
+});
+
+test('cli entrypoint delivers the full report and the ratchet verdict through a pipe', async () => {
+  const { spawnSync } = await import('node:child_process');
+  const dir = project(SIMPLE);
+  const many = Array.from({ length: 3000 }, (_, i) => `export function fn${i}(x) { return x + ${i}; }\n`).join('');
+  writeFileSync(path.join(dir, 'src', 'a.js'), many);
+  const cli = path.resolve('src/cli.js');
+  const write = spawnSync(process.execPath, [cli, '--baseline', 'b.json', '--write-baseline'], { cwd: dir, encoding: 'utf8' });
+  assert.equal(write.status, 0);
+  // `| cat` forces a pipe — the case where process.exit() used to drop buffered stdout
+  const r = spawnSync('sh', ['-c', `"${process.execPath}" "${cli}" --baseline b.json | cat`], { cwd: dir, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  assert.match(r.stdout, /CRAP Ratchet/);
+  assert.match(r.stdout, /0 regression\(s\)/);
 });

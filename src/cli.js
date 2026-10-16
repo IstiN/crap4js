@@ -373,6 +373,8 @@ function reportVerdict(metrics, threshold, ctx) {
   return 0;
 }
 
-if (isMain(import.meta.url)) process.exit(main(process.argv.slice(2)));
+// Set exitCode instead of calling process.exit(): exit() discards stdout still queued on a pipe
+// (~64 KB), which truncated the report/ratchet verdict of large projects piped through `tee`.
+if (isMain(import.meta.url)) process.exitCode = main(process.argv.slice(2));
 
 export { main, parseArgs, usage };
