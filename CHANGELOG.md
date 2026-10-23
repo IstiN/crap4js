@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.19.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.18.0...v0.19.0) (2026-10-23)
+
+
+### Features
+
+* **memory:** allocated-volume reporting (totalAllocatedMb, alloc MB column) ([#57](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/57)) ([98a5aa1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/98a5aa1ad2fee89d428d31aecd795b8070165a8e))
+
+## [0.18.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.17.0...v0.18.0) (2026-10-22)
+
+
+### Features
+
+* **memory:** unattributed bucket + --badge ([#55](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/55)) ([8b4ae8c](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/8b4ae8cfb398f1da74959f058bf03070c1550001))
+
+## [0.17.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.16.0...v0.17.0) (2026-10-22)
+
+
+### Features
+
+* **memory:** per-test GC/alloc attribution ([#53](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/53)) ([ead76e1](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/ead76e16bec8467c5b445373e0584a395b696c1f))
+
+## [0.16.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.15.0...v0.16.0) (2026-10-20)
+
+
+### Features
+
+* **similarity:** file-level near-duplicate gate + command ([#51](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/51)) ([b007ba0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/b007ba0287cccbfb47397158c242f6a0dcc62bf8))
+
 ## [0.15.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.14.0...v0.15.0) (2026-10-15)
 
 

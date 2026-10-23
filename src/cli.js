@@ -31,6 +31,12 @@
 //                            files; the ignore flags opt into renamed-clone
 //                            and literal masking, clones mode reports one
 //                            violation per clone group.
+//   crap4js similarity [--format console|json] [--jaccard N]
+//                      [--containment N] [--min-shingles N]
+//                      [--include GLOB]... [--exclude GLOB]... [paths...]
+//                            Scan for near-duplicate files (docs, code)
+//                            and print the similarity clusters;
+//                            informational — always exits 0.
 //   crap4js test-assertions [paths...]
 //                            Flag test() bodies with zero assertion calls.
 //   crap4js folder-structure Flag src/ dirs with loose (direct) files.
@@ -39,7 +45,8 @@
 // The first argument selects a subcommand when it is exactly `profile`,
 // `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
 // `unused-files`, `banned-imports`, `magic-constants`, `duplicates`,
-// `test-assertions`, `folder-structure`, `mutation`, or `skill`;
+// `similarity`, `test-assertions`, `folder-structure`, `mutation`,
+// `memory`, or `skill`;
 // anything else is analyzed as before.
 //
 // Exit codes: 0 success; 1 usage error; 2 CRAP/profile threshold exceeded
@@ -60,10 +67,12 @@ import { runUnusedFiles } from './unusedFiles.js';
 import { runBannedImports } from './bannedImports.js';
 import { runMagicConstants } from './magicConstants.js';
 import { runDuplicates } from './duplicates.js';
+import { runSimilarity } from './similarity.js';
 import { runTestAssertions } from './testAssertions.js';
 import { runFolderStructure } from './folderStructure.js';
 import { runMutation } from './mutation.js';
 import { parseProfileArgs, runProfile } from './profile.js';
+import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
 import { isMain } from './mainGuard.js';
 
@@ -138,6 +147,13 @@ function usage() {
     "                           file's derived test files (scoped kills cache",
     '                           as kills; survivors are re-confirmed against',
     '                           the full suite)',
+    '  crap4js memory [--top N] [--format console|json] [--badge PATH]',
+    '                  [--badge-threshold MB] [paths...]',
+    '                           Run the test suite under node --trace-gc (one',
+    '                           file per sequential child run) and report',
+    '                           per-test allocation churn and heap growth.',
+    '                           --badge writes a shields-style churn SVG.',
+    '                           Informational — always exits 0.',
     '  crap4js skill            Print the crap4js profiling skill for AI agents',
     '',
   ].join('\n');
@@ -156,9 +172,11 @@ const SUBCOMMANDS = {
   'banned-imports': (args, ctx) => runBannedImports(args, ctx),
   'magic-constants': (args, ctx) => runMagicConstants(args, ctx),
   duplicates: (args, ctx) => runDuplicates(args, ctx),
+  similarity: (args, ctx) => runSimilarity(args, ctx),
   'test-assertions': (args, ctx) => runTestAssertions(args, ctx),
   'folder-structure': (args, ctx) => runFolderStructure(args, ctx),
   mutation: (args, ctx) => runMutation(args, ctx),
+  memory: (args, ctx) => runMemory(args, ctx),
   skill: (_args, ctx) => runSkill(ctx),
 };
 

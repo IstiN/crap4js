@@ -342,6 +342,92 @@ Skipped from upstream: `--tags`/`--exclude-tags` (`node --test` has no tag
 concept — use `--name` patterns) and the config-file options (crap4js has no
 config system; all knobs are CLI flags).
 
+## Memory
+
+`crap4js memory [--top N] [--format console|json] [--badge PATH]
+[--badge-threshold MB] [paths...]` — per-test GC/alloc attribution, port
+of crap4dart 3bae178 (upstream spec 4.7, phase 1), hardened per upstream
+11551739c8 (phase 2: per-child clocks + unattributed bucket + badge).
+Runs the suite under the runtime's GC tracing and attributes GC events
+and reclaimed memory to files and tests. Informational only: always exits
+0 (1 on usage errors); thresholds and the `memory_pressure` gate come
+separately — raw GC counts are machine-dependent, allocated MB are not.
+
+- Runner: `node --trace-gc --test --test-reporter=tap <file>`, one test
+  file per sequential child run. node:test already gives every file its
+  own process, so the process boundary is the exact file attribution —
+  the analog of upstream's isolate-name/dill-index machinery; straggler
+  rows cannot cross runs (each child's pipes are read separately and
+  rows carry the child pid), so upstream's seq-continuation guard has no
+  analog here. Rows of the runner process itself go to the unattributed
+  bucket; when the pid discriminator would empty a non-empty row set
+  (in-process isolation topology), the rows are kept as test-child rows
+  instead of fabricating zero churn. Row parsing accepts both renderings
+  of V8's `[%d:%p]` isolate header — glibc and Darwin print `0x…`
+  lowercase hex, the Windows CRT bare uppercase hex. TAP spans (ok/
+  not-ok + `duration_ms` diagnostics) provide the test windows;
+  `type: 'suite'` spans (describe blocks) are windows too but are not
+  counted as tests.
+- Clocks and trust (the phase-2 semantics, adapted to this runtime):
+  trace-gc timestamps count ms since the CHILD process started — every
+  file owns its clock, and its zero in wall time is MEASURED from the
+  file's own first GC row (stderr streams unbuffered: zero = arrival −
+  ts) — the analog of upstream's suite event time marking the
+  isolate-clock zero. TAP ok-lines arrive in one buffered burst at child
+  exit, so test windows are tiled back from the burst with the real
+  `duration_ms` values (tests run sequentially); describe-nested spans
+  tile flat, so per-test grain under describe is approximate — the row
+  still counts toward its file. Only rows INSIDE a test window are
+  trusted: loading rows (module compilation, before the first window),
+  teardown rows (after the last), and runner-process rows land in a
+  separate UNATTRIBUTED bucket that never pollutes file totals; the
+  tiled windows are disjoint, so a shared tile edge attributes to the
+  earlier test (the outcome of upstream's narrower-window rule under
+  tiling). There is no
+  global clock offset to calibrate — phase 1's per-file p90 offset vote
+  was the artifact source upstream removed; the per-child zero replaces
+  it. `--badge <path>` (+ `--badge-threshold MB`, default 500) writes a
+  shields-style `memory churn | <N> MB` SVG of the suite total: green at
+  or below the threshold, yellow at most twice it, red beyond.
+- Semantics: a `--trace-gc` row exposes the WHOLE heap used before →
+  after one collection — V8 exposes no generation split, so upstream's
+  new-gen churn / old-gen growth pair collapses to `churnMb`
+  (Σ max(0, before − after): reclaimed heap volume, the allocation proxy)
+  and `heapGrowthMb` (Σ after − before: signed retained growth, the leak
+  suspect). The `pooled:` external-memory column and pause times are
+  parsed past, not summed. Totals span every parsed row; suite/test
+  totals carry only window-attributed rows — the difference is exactly
+  the bucket.
+- Allocation volume (ported from crap4dart b7c227d): the report and the
+  JSON carry `totalAllocatedMb`, the console headline appends
+  `, allocated N MB` when positive, and the churn leaderboard is titled
+  "top N by allocation volume (churn MB proxy on node)" with an
+  `alloc MB` column. On node `totalAllocatedMb` IS the churn total: V8
+  exposes no exact gross allocation counter to an out-of-process
+  reporter, so the reclaimed-heap proxy is the documented honest value
+  (upstream's Dart engine reports the same proxy; only its Flutter
+  engine reads exact bytes from the VM's allocation profile). Upstream's
+  `--engine auto|dart|flutter` flag is N/A in this port: node is spawned
+  directly by the command (one test file per child), so no
+  flag-swallowing middleware sits between the tool and the measured
+  runtime — there is no engine whose flags need re-routing.
+- Output: console leaderboards (top N by churn, top N by heap growth,
+  plus the unattributed line) or `--format json` (stdout stays
+  JSON-only, progress on stderr) with `testCount`, `gcCount`,
+  `totalChurnMb`, `totalAllocatedMb`, `totalHeapGrowthMb`,
+  `unattributedCount`, `unattributedChurnMb`, per-suite and per-test
+  entries.
+- Churn totals are deterministic at file level (function of the code):
+  dogfooding this repo, 382 tests / ~187 GCs / ~197 MB total churn, of
+  which ~111 loading/teardown/runner GCs (~55 MB) are unattributed;
+  window-attributed file numbers repeat across runs to ~±1% for files
+  with real churn (top: `testAssertions.test.js` ~40 MB in both runs);
+  sub-MB files can flip a single boundary row between a window and the
+  bucket. `badges/memory.svg` tracks the self suite and is refreshed by
+  running the command manually — the commit-badges workflow refreshes
+  only the CRAP/coverage badges, never memory.svg. Churn is the future
+  gate metric, never counts.
+
 ## File naming
 
 `crap4js file-naming [paths...]` (default: the normal source-selection rules)
@@ -753,6 +839,80 @@ test), so it is re-confirmed ONCE against the full invocation and only
 the confirmed outcome is reported and cached. The mutant test runner
 receives the resolved per-site invocation arguments; the summary appends
 `; test-scoped N (M re-confirmed killed)` when scoping ran.
+
+### similarity
+
+Port of the crap4dart 0.15.0 similarity engine and command (upstream
+spec §11.23, commit 2b21966), parser-free and language-agnostic:
+
+```
+crap4js similarity [--format console|json] [--jaccard N]
+                   [--containment N] [--min-shingles N]
+                   [--include GLOB]... [--exclude GLOB]... [paths...]
+```
+
+Each scanned file is normalized by its extension profile before any
+comparison. `markdown` (`.md`, `.markdown`, `.mdx`) drops fenced code
+blocks (``` / ~~~ toggling, both markers interchangeable) and keeps the
+trimmed prose lines joined with spaces; single characters and punctuation
+drop out at tokenization. `code` (25 source extensions from `.dart` to
+`.sql`) strips block comments line-wise (an unterminated `/*` carries
+across lines; text after a closing `*/` re-joins), drops line comments
+(`//`, `#`, `--`, `;`) and import-family lines (`import`/`export`/
+`part`/`library`, `from`/`require`/`require_once`/`using`/`package`/
+`include`, shebangs), then tokenizes to identifiers (lowercased) and
+quoted strings/numbers mapped to the `S`/`N` placeholders — clones
+differing only in literal values still match. Any other extension is
+`raw`: content passes through, compared with the prose word tokenizer
+(latin+cyrillic runs of 2+ characters, lowercased). One profile per
+file, exactly upstream: no JS-specific parser is involved, so the same
+scan covers mixed-language corpora.
+
+Shingles are 8 consecutive comparison tokens joined with the unit
+separator (upstream's `\u001f`); files with fewer than 8 tokens produce
+no shingles and are skipped as `skipped` once below `--min-shingles`
+(default 50). Pairs are compared by Jaccard (intersection over union)
+and containment (intersection over the smaller set): a pair crosses when
+EITHER metric meets its threshold (`--jaccard` 0.8, `--containment` 0.95
+— the upstream gate template defaults; containment catches a small file
+largely copied into a big one, where Jaccard stays low). Crossing pairs
+sort by Jaccard descending; transitive closure over the pairs (union-find
+with path compression upstream, plain find here — same clusters) merges
+them into clusters of 2+ files, largest first. `metricsFor` reports each
+file's strongest (highest-Jaccard) pair metrics for the per-file console
+lines.
+
+Scan set: `dirs` (default `['.']`) walked recursively, include globs
+(default `**/*.md`) and exclude globs (default `.git/**`,
+`node_modules/**`, `build/**`, `coverage/**` — upstream's list minus
+`.dart_tool/**`, which has no JS counterpart) matched against
+project-relative paths. Positional paths override the dirs: one existing
+directory becomes the scan root itself (`dirs: ['.']`), several paths
+are subdirectories of the project root, none uses the defaults —
+upstream's `_scanTargets` semantics. Upstream reads the same knobs as
+flat YAML keys under the similarity gate — crap4js has no config, so
+they are kebab-case CLI flags; unknown/invalid values are usage errors
+(exit 1), mirroring the upstream loader's strict validation.
+
+Upstream ships this as an opt-in config gate (`enabled: false`,
+violations fail `check` with exit 2) PLUS the ad-hoc `similarity`
+command (always exit 0). crap4js has no gate framework or check
+pipeline — every gate here is a subcommand — so the port is the
+command: informational only, ALWAYS exits 0, clean or dirty; the
+one-violation-per-clustered-file gate rendering has no separate surface
+(the console cluster listing carries the same per-file metrics). Console
+output: a `similarity: N files scanned (M skipped below K shingles),
+thresholds jaccard >= J / containment >= C` header, then either
+`no similar files` or one `cluster i — F files:` block listing each file
+as `path (jaccard X.XX, containment Y.YY)`, then the
+`F files in C clusters` summary. `--format json` prints
+`{scanned, skipped, thresholds: {jaccard, containment, min_shingles},
+pairs: [{a, b, jaccard, containment}], clusters: [{files}]}` with pair
+metrics rounded to 4 decimals and stdout kept JSON-only.
+
+Dogfooding matches upstream: the port's own md corpus (README, spec,
+CHANGELOG) measures clean at jaccard 0.6 / containment 0.9 and still at
+0.5/0.85.
 
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 
