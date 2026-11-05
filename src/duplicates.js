@@ -115,7 +115,7 @@ export function runDuplicates(argv, ctx) {
 // port's standard exclusion, upstream's default test glob) and --exclude
 // globs — matched against project-relative POSIX paths — are filtered from
 // the union; the result is sorted for deterministic scans.
-function scanSet(opts, projectRoot) {
+export function scanSet(opts, projectRoot) {
   const files = new Set(gateFiles(opts.paths, projectRoot));
   for (const f of expandPaths(opts.source, projectRoot, isAnySourceFile)) {
     files.add(f);
@@ -638,7 +638,56 @@ function clonesResult(bags, groups) {
         `${locations.length} occurrences: ${shown}${more}`,
     };
   });
-  return { violations, checked: bags.length, totalPercent: totalPercent(bags) };
+  return {
+    violations,
+    clones: groups.map((group) => cloneRecord(bags, group)),
+    checked: bags.length,
+    totalPercent: totalPercent(bags),
+  };
+}
+
+// Structured form of an accepted clone group (diff-scoped gates need the
+// occurrence ranges, not the message): `{ tokens, lines, occurrences:
+// [{ file, startLine, endLine }] }`. A group is clipped to the extent ALL its
+// occurrences share, so a third copy would shrink a long pair to the bare
+// window; each occurrence is therefore re-extended to the most it shares with
+// ANY other occurrence (pairwise, the way CPD/jscpd report clones).
+function cloneRecord(bags, group) {
+  const [refBag, refStart, refEnd] = group[0];
+  const ref = bags[refBag].tokens;
+  return {
+    tokens: refEnd - refStart,
+    lines: ref[refEnd - 1].line - ref[refStart].line + 1,
+    occurrences: group.map((occ, i) => {
+      const [b, s, e] = widenOccurrence(bags, group, i);
+      return { file: bags[b].rel, startLine: bags[b].tokens[s].line, endLine: bags[b].tokens[e - 1].line };
+    }),
+  };
+}
+
+// Token equality of the detector: masked value, or raw lexeme (the raw pass).
+function sameToken(a, b) {
+  return a.value === b.value || (a.lexeme !== undefined && a.lexeme === b.lexeme);
+}
+
+// How far [s, e) of occurrence `i` grows left and right while it still
+// matches at least one other occurrence of the group token for token.
+function widenOccurrence(bags, group, i) {
+  const [b, s, e] = group[i];
+  const mine = bags[b].tokens;
+  let left = 0;
+  let right = 0;
+  group.forEach(([ob, os, oe], j) => {
+    if (j === i) return;
+    const other = bags[ob].tokens;
+    let l = 0;
+    while (s - l > 0 && os - l > 0 && sameToken(mine[s - l - 1], other[os - l - 1])) l++;
+    let r = 0;
+    while (e + r < mine.length && oe + r < other.length && sameToken(mine[e + r], other[oe + r])) r++;
+    left = Math.max(left, l);
+    right = Math.max(right, r);
+  });
+  return [b, s - left, e + right];
 }
 
 // The project-wide duplicated-line percentage over the scanned bags

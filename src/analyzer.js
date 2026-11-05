@@ -4,6 +4,7 @@
 //   methodName: string,
 //   file: string,          // project-relative
 //   startLine: number,     // kept for stable tie-breaking
+//   endLine: number,       // last line of the function (diff-scoped gates)
 //   complexity: number,
 //   coverage: number|null, // fraction [0,1]
 //   crapScore: number|null
@@ -82,6 +83,7 @@ function analyzeFile(file, projectRoot, coverageMap, warn, metric) {
       methodName: m.name,
       file: rel,
       startLine: m.startLine,
+      endLine: m.endLine,
       complexity: m.complexity,
       coverage,
       crapScore: crapScore(m.complexity, coverage),

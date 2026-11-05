@@ -72,6 +72,7 @@ import { runUnusedFiles } from './unusedFiles.js';
 import { runBannedImports } from './bannedImports.js';
 import { runMagicConstants } from './magicConstants.js';
 import { runDuplicates } from './duplicates.js';
+import { runDiffCheck } from './diffCheck.js';
 import { runSimilarity } from './similarity.js';
 import { runTestAssertions } from './testAssertions.js';
 import { runInlineAnonTypes } from './inlineAnonTypes.js';
@@ -132,6 +133,12 @@ function usage() {
     '                           files; the ignore flags opt into renamed-clone',
     '                           and literal masking, clones mode reports one',
     '                           violation per clone group',
+    '  crap4js diff-check [--base REF] [--coverage FILE] [--min-coverage N] [--threshold N]',
+    '                     [--min-tokens N] [--min-lines N] [--exclude GLOB]... [--exact-clones]',
+    '                     [--warn-only] [--github] [--no-coverage-gate|--no-crap-gate|--no-duplicates-gate]',
+    '                           Diff-scoped PR gate vs merge-base (default origin/develop): changed-lines',
+    '                           coverage >= N% (80), modified functions CRAP <= threshold (8), no duplicated',
+    '                           blocks touching changed lines. Stores nothing; fails closed on tool errors',
     '  crap4js test-assertions [paths...]',
     '                           Flag test()/it() bodies with zero assertion calls',
     '  crap4js inline-anon-types [--max-fields N] [paths...]',
@@ -183,6 +190,7 @@ const SUBCOMMANDS = {
   'banned-imports': (args, ctx) => runBannedImports(args, ctx),
   'magic-constants': (args, ctx) => runMagicConstants(args, ctx),
   duplicates: (args, ctx) => runDuplicates(args, ctx),
+  'diff-check': (args, ctx) => runDiffCheck(args, ctx),
   similarity: (args, ctx) => runSimilarity(args, ctx),
   'test-assertions': (args, ctx) => runTestAssertions(args, ctx),
   'inline-anon-types': (args, ctx) => runInlineAnonTypes(args, ctx),
