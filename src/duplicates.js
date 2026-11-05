@@ -60,6 +60,8 @@ const BOOLEAN_FLAGS = {
   '--ignore-identifiers': 'ignoreIdentifiers',
   '--ignore-imports': 'ignoreImports',
   '--skip-duplicate-files': 'skipDuplicateFiles',
+  '--ignore-properties': 'ignoreProperties',
+  '--pairwise': 'pairwise',
 };
 
 /**
@@ -149,7 +151,7 @@ export function scanSet(opts, projectRoot) {
  */
 export function duplicatesViolations(files, projectRoot, opts) {
   const bags = tokenizeFiles(files, projectRoot, opts);
-  const groups = acceptGroups(bags, detectClones(bags, opts));
+  const groups = acceptGroups(bags, detectClones(bags, opts), opts.pairwise);
   if (opts.report === 'clones') return clonesResult(bags, groups);
   const violations = [];
   let checkedLines = 0;
@@ -180,6 +182,7 @@ const MASKING_KEYS = [
   'ignoreIdentifiers',
   'ignoreImports',
   'skipDuplicateFiles',
+  'ignoreProperties',
 ];
 
 function tokenizeFiles(files, projectRoot, opts) {
@@ -188,9 +191,9 @@ function tokenizeFiles(files, projectRoot, opts) {
   for (const file of files) {
     const source = readFileSync(file, 'utf8');
     const ext = path.extname(file);
-    const tokens = masked
+    const tokens = (masked
       ? normalizedTokens(source, ext, opts)
-      : tokenizeSource(source, ext);
+      : tokenizeSource(source, ext)).filter(isCodeToken);
     if (tokens.length < opts.minTokens) continue;
     if (isCopiedStream(bags, tokens, opts)) continue;
     bags.push({
@@ -205,6 +208,12 @@ function tokenizeFiles(files, projectRoot, opts) {
 // CPD --skip-duplicate-files: whether a file whose token stream equals an
 // earlier file's is dropped - a copied file is analyzed once, reported as
 // one clone group, not as N x N pairs.
+// Whitespace-only JSX text (indentation between tags) is layout, not code:
+// keeping it makes a re-indented JSX copy look different.
+function isCodeToken(token) {
+  return !/^\s+$/.test(token.lexeme ?? token.value);
+}
+
 function isCopiedStream(bags, tokens, opts) {
   return Boolean(opts.skipDuplicateFiles) &&
     bags.some((bag) => sameTokens(bag.tokens, tokens));
@@ -392,19 +401,25 @@ const IDENTIFIER_LABELS = new Set(['name', 'privateName']);
 // identifiers AND contextual keywords (async, of, from, as, get, ...) —
 // the JS analog of upstream's built-in/pseudo keyword slots — and
 // `privateName` the #-prefixed ones; real keywords keep their lexeme.
-function tokenValue(token, lexeme, opts, scopes) {
-  if (opts.ignoreLiterals) {
-    const placeholder = literalPlaceholder(token);
-    if (placeholder) return placeholder;
-  }
+function tokenValue(token, lexeme, opts, scopes, props) {
+  const masked = literalOrProperty(token, opts, props);
+  if (masked) return masked;
   if (opts.ignoreIdentifiers && IDENTIFIER_LABELS.has(token.type.label)) {
     return '$ID';
   }
-  if (scopes.length > 0 && token.type.label === 'name') {
-    const scope = scopeAt(scopes, token.start);
-    if (scope?.names.has(lexeme)) return scope.placeholderFor(lexeme);
-  }
-  return lexeme;
+  return localPlaceholder(token, lexeme, scopes) ?? lexeme;
+}
+
+function literalOrProperty(token, opts, props) {
+  const placeholder = opts.ignoreLiterals ? literalPlaceholder(token) : undefined;
+  if (placeholder) return placeholder;
+  return props.has(token.start) ? '$PROP' : undefined;
+}
+
+function localPlaceholder(token, lexeme, scopes) {
+  if (scopes.length === 0 || token.type.label !== 'name') return undefined;
+  const scope = scopeAt(scopes, token.start);
+  return scope?.names.has(lexeme) ? scope.placeholderFor(lexeme) : undefined;
 }
 
 // Normalized token stream for the masked modes: raw lexeme plus masked
@@ -416,21 +431,59 @@ function tokenValue(token, lexeme, opts, scopes) {
 // ignore_locals alone.
 function normalizedTokens(source, ext, opts) {
   const { tokens, program } = parseTokenized(source, ext);
-  const scopes = opts.ignoreLocals ? buildScopes(program) : [];
-  const ranges = opts.ignoreImports ? importSkipRanges(program) : [];
+  const ctx = maskingContext(program, opts);
   const normalized = [];
   for (const token of tokens) {
-    if (token.type.label === 'eof' || typeof token.type === TYPE_STRING) continue;
-    if (inRanges(ranges, token.start)) continue;
-    const lexeme = source.slice(token.start, token.end);
-    normalized.push({
-      lexeme,
-      value: tokenValue(token, lexeme, opts, scopes),
-      line: token.loc.start.line,
-    });
+    if (isSkippedToken(token, ctx.ranges)) continue;
+    normalized.push(normalizedToken(source, token, opts, ctx));
   }
   return normalized;
 }
+
+// The AST-derived masking inputs, built only for the knobs that need them.
+function maskingContext(program, opts) {
+  return {
+    scopes: opts.ignoreLocals ? buildScopes(program) : [],
+    ranges: opts.ignoreImports ? importSkipRanges(program) : [],
+    props: opts.ignoreProperties ? propertyStarts(program) : new Set(),
+  };
+}
+
+function isSkippedToken(token, ranges) {
+  if (token.type.label === 'eof' || typeof token.type === TYPE_STRING) return true;
+  return inRanges(ranges, token.start);
+}
+
+// One token in all its spellings: raw lexeme, literal-masked (the second raw
+// pass) and fully masked value.
+function normalizedToken(source, token, opts, { scopes, props }) {
+  const lexeme = source.slice(token.start, token.end);
+  const literal = opts.ignoreLiterals ? literalPlaceholder(token) : undefined;
+  return {
+    lexeme,
+    literal: literal ?? lexeme,
+    value: tokenValue(token, lexeme, opts, scopes, props),
+    line: token.loc.start.line,
+  };
+}
+
+// Start offsets of non-computed member-access property names (`a.b`,
+// `a?.b`) masked by --ignore-properties: `item.sender.city` and
+// `item.receiver.city` are the same code with a different field.
+function propertyStarts(program) {
+  const starts = new Set();
+  const visit = (node) => {
+    if (MEMBER_TYPES.has(node.type) && !node.computed && node.property?.type === IDENT_TYPE) {
+      starts.add(node.property.start);
+    }
+    for (const child of childNodes(node)) visit(child);
+  };
+  visit(program);
+  return starts;
+}
+
+const MEMBER_TYPES = new Set(['MemberExpression', 'OptionalMemberExpression']);
+const IDENT_TYPE = 'Identifier';
 
 // Token [start, end) ranges excluded under --ignore-imports: import/export
 // directives — the JS analog of upstream's import/export/part — plus
@@ -500,8 +553,12 @@ function lineCount(source) {
 // copies whose enclosing scopes shift the numbering.
 function detectClones(bags, opts) {
   const candidates = [];
-  if (opts.ignoreLocals) {
+  if (opts.ignoreLocals || opts.ignoreProperties) {
     candidates.push(...collectGroups(bags, opts, (t) => t.lexeme));
+    // Literal-masked raw pass: the same local names with different strings
+    // (`'/suggest?'` vs `'/lookup?'`) — placeholder numbering of the full
+    // masked pass can differ between two scopes and miss them.
+    if (opts.ignoreLiterals) candidates.push(...collectGroups(bags, opts, (t) => t.literal));
   }
   candidates.push(...collectGroups(bags, opts, (t) => t.value));
   // Longest clones first, then most occurrences, then position — the
@@ -523,6 +580,7 @@ function collectGroups(bags, opts, codeOf) {
     if (positions.length >= 2) {
       const group = groupFromBucket(bags, positions, codes, minTokens, minLines);
       if (group) groups.push(group);
+      if (opts.pairwise) groups.push(...pairGroups(bags, positions, codes, opts, group));
     }
   }
   return groups;
@@ -569,6 +627,39 @@ function groupFromBucket(bags, positions, codes, minTokens, minLines) {
   });
 }
 
+// --pairwise (jscpd-style pairs): a bucket of N>2 positions is clipped to the
+// span ALL of them share, so a long copy that also matches a short third
+// occurrence would be reported only as the short window. Every pair whose own
+// maximal extent is longer becomes its own two-occurrence candidate. Buckets
+// beyond MAX_PAIRWISE positions (boilerplate) skip this O(N^2) step.
+const MAX_PAIRWISE = 24;
+
+function pairGroups(bags, positions, codes, opts, group) {
+  if (positions.length < 3 || positions.length > MAX_PAIRWISE) return [];
+  const common = group ? group[0][2] - group[0][1] : opts.minTokens;
+  const out = [];
+  for (let i = 0; i < positions.length; i++) {
+    for (let j = i + 1; j < positions.length; j++) {
+      const pair = maximalPair(bags, positions[i], positions[j], codes, opts);
+      if (pair && pair[0][2] - pair[0][1] > common) out.push(pair);
+    }
+  }
+  return out;
+}
+
+// The maximal shared extent of two windows, or null when it self-overlaps
+// (a run repeating itself) or spans fewer than minLines lines.
+function maximalPair(bags, [b1, s1], [b2, s2], codes, { minTokens, minLines }) {
+  const [start2, end2] = extentOf(codes[b2], s2, codes[b1], s1, minTokens);
+  const left = s2 - start2;
+  const a = [b1, s1 - left, s1 - left + (end2 - start2)];
+  const b = [b2, start2, end2];
+  if (b1 === b2 && a[1] < b[2] && b[1] < a[2]) return null;
+  const toks = bags[b1].tokens;
+  if (toks[a[2] - 1].line - toks[a[1]].line + 1 < minLines) return null;
+  return [a, b];
+}
+
 // The reporting order: longest clones first, then most occurrences, then
 // first position.
 function byPriority(a, b) {
@@ -581,12 +672,16 @@ function byPriority(a, b) {
 // Greedily accepts non-overlapping groups — PMD CPD Match semantics — and
 // marks their tokens duplicated; a group whose ANY occurrence overlaps an
 // already accepted range is dropped whole.
-function acceptGroups(bags, candidates) {
+function acceptGroups(bags, candidates, pairwise = false) {
   const accepted = [];
   const taken = new Map();
   for (const group of candidates) {
-    if (group.some(([b, s, e]) => overlaps(taken.get(b), s, e))) continue;
-    for (const [b, s, e] of group) {
+    const fresh = group.filter(([b, s, e]) => !overlaps(taken.get(b), s, e));
+    // CPD drops a group touching any accepted range; --pairwise keeps it when
+    // at least one occurrence is new (a fourth copy of a known clone is
+    // still a copy), marking only the new ranges.
+    if (pairwise ? fresh.length === 0 : fresh.length < group.length) continue;
+    for (const [b, s, e] of fresh) {
       if (!taken.has(b)) taken.set(b, []);
       taken.get(b).push([s, e]);
       const tokens = bags[b].tokens;
@@ -687,7 +782,21 @@ function widenOccurrence(bags, group, i) {
     left = Math.max(left, l);
     right = Math.max(right, r);
   });
-  return [b, s - left, e + right];
+  return clampToNeighbours(group, i, [b, s - left, e + right]);
+}
+
+// A widened occurrence must not grow into another occurrence of the same
+// group in the same file (a repeated table row would otherwise swallow its
+// neighbour and report one range overlapping itself).
+function clampToNeighbours(group, i, [b, s, e]) {
+  let start = s;
+  let end = e;
+  group.forEach(([ob, os, oe], j) => {
+    if (j === i || ob !== b) return;
+    if (oe <= group[i][1]) start = Math.max(start, oe);
+    if (os >= group[i][2]) end = Math.min(end, os);
+  });
+  return [b, start, end];
 }
 
 // The project-wide duplicated-line percentage over the scanned bags

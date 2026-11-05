@@ -385,7 +385,8 @@ violations exist.
 
 `crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
 [--report percentage|clones] [--ignore-locals] [--ignore-literals]
-[--ignore-identifiers] [--ignore-imports] [--skip-duplicate-files]
+[--ignore-identifiers] [--ignore-imports] [--ignore-properties]
+[--pairwise] [--skip-duplicate-files]
 [--exclude GLOB]... [--source PATH]... [paths...]` (port of crap4dart's
 duplication gate, 0.9.x incl. commit d6c3ab6, including its per-gate
 `sources` union) detects copy-paste duplicates. Every scanned file is
@@ -437,6 +438,27 @@ Opt-in normalizations extend detection beyond exact copy-paste:
   too) is analyzed once (CPD `--skip-duplicate-files`) — a copied file
   is reported once, not as N x N pairs.
 
+- `--ignore-properties`: names after `.`/`?.` in member access collapse to
+  `$PROP` — `item.sender.city` and `item.receiver.city` are the same code
+  reading a different field (address mappers, per-field form inputs).
+- `--pairwise`: jscpd-style pair reporting on top of CPD groups. A bucket
+  of 3+ windows is clipped to the span all of them share; `--pairwise`
+  also reports every pair at its own full extent, and keeps a group whose
+  occurrences are partly known (a 4th copy of a known clone still counts).
+
+Whitespace-only JSX text (indentation between tags) is always dropped
+from the token stream, so re-indented JSX copies still match.
+
+**Compared with jscpd 4.3** on a 1184-file React Native/TS app
+(min 50 tokens / 5 lines): with `--ignore-locals --ignore-literals
+--ignore-properties --pairwise` crap4js finds 71 of jscpd's 73 well-formed
+clone pairs (the 18 others jscpd reports have mismatched line ranges from
+its JSX/JS sub-format splitting) plus ~130 groups jscpd cannot see
+(renamed locals, different literals/fields — e.g. translated locale files,
+copy-pasted address mappers), in ~1.7 s vs ~4 s. The two remaining misses
+differ in a real value (`styles.x` vs `StyleSheet.absoluteFill`,
+`[dep]` vs `[]`) that jscpd's tokenizer ignores.
+
 With the flags off the gate reports exact copy-paste only. Detection is
 a union of two passes (upstream 94299e0): the raw-lexeme pass runs
 alongside the masked one whenever local renaming is on, so enabling
@@ -454,6 +476,30 @@ widening the CRAP analysis scope. `--exclude` globs (same
 `*`/`**`/`?` semantics as banned-imports) drop matching project-relative
 paths from the union. Files with fewer than `--min-tokens` tokens are
 skipped from the scan. Exit 2 iff violations exist.
+
+## `diff-check`
+
+`crap4js diff-check [--base REF] [--coverage FILE] [--min-coverage N]
+[--threshold N] [--min-tokens N] [--min-lines N] [--exclude GLOB]...
+[--exact-clones] [--warn-only] [--github] [--no-coverage-gate]
+[--no-crap-gate] [--no-duplicates-gate] [paths...]` is a diff-scoped
+("clean as you code") PR gate. Nothing is stored: everything is computed
+against `git merge-base <base> HEAD` (default `origin/develop`), covering
+committed, staged, unstaged and untracked changes.
+
+1. Changed-lines coverage (statements starting on a changed line) must
+   reach `--min-coverage` percent (default 80).
+2. Every function overlapping a changed line must have CRAP <=
+   `--threshold` (default 8) — touch it, bring it under the bar.
+3. No clone occurrence may overlap a changed line. The whole project is
+   scanned (with `--ignore-locals --ignore-literals --ignore-imports
+   --ignore-properties --pairwise`, or exact copies only with
+   `--exact-clones`), so the other copy is found even in untouched files.
+
+Fails closed: a missing coverage file or unknown/unfetched base ref is an
+error (exit 1; CI needs `fetch-depth: 0`). Exit 2 means violations;
+`--warn-only` prints them and exits 0 (rollout mode); `--github` adds
+`::error file=…,line=…::` annotations.
 
 ## `test-assertions`
 

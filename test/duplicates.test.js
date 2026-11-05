@@ -1024,3 +1024,78 @@ test('--skip-duplicate-files passes where every file is a copy', () => {
     cleanup(root);
   }
 });
+
+// ── jscpd parity features ──────────────────────────────────────────────
+
+const card = (field) => `export function render${field}(item) {
+  return (
+    <View style={styles.row}>
+            <Icon width={24} height={24} color={palette.brand} />
+      <Text style={styles.title}>{item.${field}.label}</Text>
+      <Text style={styles.subtitle}>{item.${field}.value}</Text>
+      <Text style={styles.subtitle}>{item.${field}.hint}</Text>
+    </View>
+  );
+}
+`;
+
+test('whitespace-only JSX text is layout: re-indented JSX copies still match', () => {
+  const a = card('sender');
+  const b = a.replace(/\n {12}<Icon/, '\n      <Icon');
+  const root = fixture({ 'src/a.jsx': a, 'src/b.jsx': b });
+  try {
+    const r = duplicatesViolations(
+      [path.join(root, 'src/a.jsx'), path.join(root, 'src/b.jsx')], root,
+      { threshold: 1, minTokens: 40, minLines: 5, report: 'clones' });
+    assert.equal(r.clones.length, 1, JSON.stringify(r.violations));
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--ignore-properties: same code reading a different field is a clone', () => {
+  const root = fixture({ 'src/a.jsx': card('sender'), 'src/b.jsx': card('receiver') });
+  const files = [path.join(root, 'src/a.jsx'), path.join(root, 'src/b.jsx')];
+  const base = { threshold: 1, minTokens: 40, minLines: 5, report: 'clones', ignoreLocals: true };
+  try {
+    const longest = (r) => Math.max(0, ...r.clones.flatMap((c) => c.occurrences.map((o) => o.endLine - o.startLine + 1)));
+    const plain = duplicatesViolations(files, root, base);
+    const r = duplicatesViolations(files, root, { ...base, ignoreProperties: true });
+    assert.ok(longest(r) > longest(plain), `${longest(r)} vs ${longest(plain)}`);
+    assert.ok(longest(r) >= 8, 'whole card body matches once fields are masked');
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('parseDuplicateArgs: --ignore-properties and --pairwise flags', () => {
+  const o = parseDuplicateArgs(['--ignore-properties', '--pairwise']);
+  assert.equal(o.ignoreProperties, true);
+  assert.equal(o.pairwise, true);
+});
+
+// A long block copied twice plus a short third copy of its head: CPD-style
+// buckets clip all three to the short span; --pairwise also reports the long
+// pair at its full extent.
+test('--pairwise: long pair is reported at full length despite a short third copy', () => {
+  const long = blockLines(12).join('\n');
+  const short = blockLines(4).join('\n');
+  const root = fixture({
+    'src/a.js': `${long}\nconst endA = 1;\n`,
+    'src/b.js': `${long}\nconst endB = 2;\n`,
+    'src/c.js': `${short}\nconst other = 3;\n`,
+  });
+  const files = ['a', 'b', 'c'].map((n) => path.join(root, `src/${n}.js`));
+  const opts = { threshold: 1, minTokens: 20, minLines: 2, report: 'clones' };
+  try {
+    const maxLines = (r) => Math.max(...r.clones.map((c) => c.lines));
+    const plain = duplicatesViolations(files, root, opts);
+    const pair = duplicatesViolations(files, root, { ...opts, pairwise: true });
+    assert.ok(maxLines(pair) >= 12, JSON.stringify(pair.violations));
+    assert.ok(pair.clones.length >= plain.clones.length);
+    const occ = pair.clones.flatMap((c) => c.occurrences);
+    assert.ok(occ.some((o) => o.file === 'src/c.js'), 'short copy still reported');
+  } finally {
+    cleanup(root);
+  }
+});

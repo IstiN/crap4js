@@ -238,7 +238,9 @@ function cloneViolation(clone, occ) {
 
 function detectClones(opts, ctx) {
   const files = scanSet({ paths: opts.paths, source: [], exclude: opts.exclude }, ctx.cwd);
-  const masks = opts.exactClones ? {} : { ignoreLocals: true, ignoreLiterals: true, ignoreImports: true };
+  const masks = opts.exactClones
+    ? { pairwise: true }
+    : { ignoreLocals: true, ignoreLiterals: true, ignoreImports: true, ignoreProperties: true, pairwise: true };
   return duplicatesViolations(files, ctx.cwd, {
     threshold: 1,
     minTokens: opts.minTokens,
