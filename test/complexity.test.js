@@ -275,6 +275,37 @@ export function greet(u: User): string {
   assert.equal(m.complexity, 2);
 });
 
+test('TypeScript (.ts): angle-bracket type assertion <Type>expr parses without JSX conflict', () => {
+  const src = `
+export namespace InlineResponse201 {
+  export enum StatusEnum {
+    Success = <any>"success",
+  }
+}
+export function check(x: unknown): string {
+  if (x) return <string>x;
+  return "none";
+}
+`;
+  const methods = extractMethods(src, { ext: '.ts' });
+  const m = find(methods, 'check');
+  assert.ok(m, 'check not extracted');
+  assert.equal(m.complexity, 2);
+});
+
+test('TypeScript JSX (.tsx): typed component with JSX parses', () => {
+  const src = `
+interface Props { active: boolean }
+export function Badge({ active }: Props) {
+  return <span>{active ? "on" : "off"}</span>;
+}
+`;
+  const methods = extractMethods(src, { ext: '.tsx' });
+  const m = find(methods, 'Badge');
+  assert.ok(m, 'Badge not extracted');
+  assert.equal(m.complexity, 2);
+});
+
 test('class private method is named ClassName.#method and counted', () => {
   const src = `
 class Counter {

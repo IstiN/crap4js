@@ -44,19 +44,26 @@ export const SKIP_KEYS = new Set([
   'leadingComments', 'trailingComments', 'innerComments', 'extra', 'directives',
 ]);
 
-// Shared by both plugin routes; only the type-syntax plugin differs because
-// @babel/parser refuses to combine flow and typescript. decorators-legacy
-// plus decoratorAutoAccessors cover stage-3 decorator syntax (`accessor`
-// fields included).
-const COMMON_PLUGINS = [
-  'jsx', 'decorators-legacy', 'decoratorAutoAccessors', 'classProperties',
+// Shared by all plugin routes; only the type-syntax and jsx plugins differ
+// because @babel/parser refuses to combine flow and typescript, and enabling
+// jsx on plain `.ts` files breaks legacy `<Type>expr` angle-bracket casts.
+// decorators-legacy plus decoratorAutoAccessors cover stage-3 decorator
+// syntax (`accessor` fields included).
+const BASE_PLUGINS = [
+  'decorators-legacy', 'decoratorAutoAccessors', 'classProperties',
   'classPrivateProperties', 'classPrivateMethods', 'objectRestSpread',
   'optionalChaining', 'nullishCoalescingOperator', 'dynamicImport',
   'exportDefaultFrom', 'asyncGenerators', 'topLevelAwait',
 ];
-const FLOW_PLUGINS = [...COMMON_PLUGINS, 'flow'];
-const TS_PLUGINS = [...COMMON_PLUGINS, 'typescript'];
-const TS_EXTS = new Set(['.ts', '.tsx']);
+const FLOW_PLUGINS = ['jsx', ...BASE_PLUGINS, 'flow'];
+const TS_PLUGINS = [...BASE_PLUGINS, 'typescript'];
+const TSX_PLUGINS = ['jsx', ...BASE_PLUGINS, 'typescript'];
+
+function pluginsForExt(ext) {
+  if (ext === '.ts') return TS_PLUGINS;
+  if (ext === '.tsx') return TSX_PLUGINS;
+  return FLOW_PLUGINS;
+}
 
 /**
  * Parse source and return every method/function entry with its complexity.
@@ -96,7 +103,7 @@ function parseMethods(source, ext, metric) {
 }
 
 function parseWith(source, ext, tokens) {
-  const plugins = TS_EXTS.has(ext) ? TS_PLUGINS : FLOW_PLUGINS;
+  const plugins = pluginsForExt(ext);
   return parse(source, {
     sourceType: 'module',
     allowImportExportEverywhere: true,

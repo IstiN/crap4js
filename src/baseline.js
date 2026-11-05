@@ -115,6 +115,14 @@ export function formatComparison(result, threshold) {
   return lines.join('\n') + '\n';
 }
 
+function currentScoreMap(metrics) {
+  const current = new Map();
+  for (const { key, metric } of keyMetrics(metrics)) {
+    if (metric.crapScore != null) current.set(key, round(metric.crapScore));
+  }
+  return current;
+}
+
 /**
  * Ratchets a baseline DOWN. Blocked (nothing to write) when the code regressed against it or has a
  * new function over the threshold. Otherwise each remaining function keeps min(old, now) — jitter
@@ -126,10 +134,7 @@ export function formatComparison(result, threshold) {
 export function ratchetDown(metrics, baseline, threshold) {
   const result = compareBaseline(metrics, baseline, threshold);
   if (result.regressions.length || result.newOverThreshold.length) return { blocked: true, result };
-  const current = new Map();
-  for (const { key, metric } of keyMetrics(metrics)) {
-    if (metric.crapScore != null) current.set(key, round(metric.crapScore));
-  }
+  const current = currentScoreMap(metrics);
   const functions = {};
   let max = 0;
   for (const key of Object.keys(baseline.functions).sort()) {

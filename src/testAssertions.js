@@ -125,7 +125,23 @@ function isAssertionCall(callee, bindings, ctx) {
   if (callee.type !== MEMBER) return false;
   return (
     isBindingRef(callee.object, bindings) ||
-    (ctx !== null && isContextAssert(callee.object, ctx))
+    (ctx !== null && isContextAssert(callee.object, ctx)) ||
+    isExpectChainCall(callee.object)
+  );
+}
+
+// Jest / Vitest / Chai `expect(...)` chains (`expect(x).toBe(y)`,
+// `expect(x).not.toEqual(y)`, `expect.assertions(1)`, `await expect(p).resolves.toBe(1)`):
+// walk the left-hand receiver spine for a root `expect(...)` call or
+// `expect.<method>(...)` static assertion.
+function isExpectChainCall(object) {
+  if (object.type === IDENT && object.name === 'expect') return true;
+  let cur = object;
+  while (cur?.type === MEMBER) cur = cur.object;
+  return (
+    cur?.type === CALL &&
+    cur.callee?.type === IDENT &&
+    cur.callee.name === 'expect'
   );
 }
 

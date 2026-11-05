@@ -79,7 +79,7 @@ function variableDeclarations(stmt) {
 
 function countIdentifiers(n, counts) {
   if (!isNode(n)) return;
-  if (n.type === 'Identifier') {
+  if (n.type === 'Identifier' || n.type === 'JSXIdentifier') {
     counts.set(n.name, (counts.get(n.name) ?? 0) + 1);
   }
   for (const c of childrenOf(n)) countIdentifiers(c, counts);

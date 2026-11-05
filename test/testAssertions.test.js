@@ -94,6 +94,21 @@ test('t.assert calls on the test context count', () => {
   assert.deepEqual(violationsOf(src), []);
 });
 
+test('Jest/Vitest expect(...) matcher chains and expect.assertions() count', () => {
+  const src = [
+    "describe('suite', () => {",
+    "  it('matcher', () => { expect(1 + 1).toBe(2); });",
+    "  it('negated', () => { expect(1).not.toEqual(2); });",
+    "  it('resolves', async () => { await expect(Promise.resolve(1)).resolves.toBe(1); });",
+    "  it('static', () => { expect.assertions(1); });",
+    "  it('bare expect without matcher does not count', () => { expect(1); });",
+    '});',
+  ].join('\n');
+  const v = violationsOf(src);
+  assert.equal(v.length, 1);
+  assert.match(v[0].message, /'bare expect without matcher does not count'/);
+});
+
 test('it(), test.skip and describe-nested tests are all checked', () => {
   const src = [
     "import { test, it, describe } from 'node:test';",

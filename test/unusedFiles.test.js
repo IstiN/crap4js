@@ -136,6 +136,35 @@ test('resolveImport resolves relative specifiers to project-relative paths', () 
   }
 });
 
+test('resolveImport resolves tsconfig.json compilerOptions.paths aliases (with JSONC comments)', () => {
+  const root = fixture({
+    'main.ts': "import { helper } from '@app/utils/helper';\nexport const x = helper;\n",
+    'utils/helper.ts': 'export const helper = 42;\n',
+  });
+  writeFileSync(
+    path.join(root, 'tsconfig.json'),
+    [
+      '{',
+      '  // line comment inside tsconfig',
+      '  "compilerOptions": {',
+      '    "baseUrl": "./src", /* block comment */',
+      '    "paths": {',
+      '      "@app/*": ["./*"]',
+      '    }',
+      '  }',
+      '}',
+    ].join('\n'),
+  );
+  try {
+    const importer = path.join(root, 'src', 'main.ts');
+    assert.equal(resolveImport('@app/utils/helper', importer, root), 'src/utils/helper.ts');
+    const { violations } = unusedFilesViolations(gateFiles([], root), root);
+    assert.deepEqual(violations.map((v) => v.file), ['src/main.ts']);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test('violations print one line per file and exit 2', () => {
   const root = fixture({ 'a.js': 'export const a = 1;\n' });
   try {

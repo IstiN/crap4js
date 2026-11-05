@@ -98,6 +98,22 @@ test('decorator identifiers count as references (decorated class not flagged)', 
   }
 });
 
+test('JSX tag and member tag identifiers (<Stack.Navigator>, <Item />) count as references', () => {
+  const root = fixture({
+    'nav.jsx': [
+      'const Stack = createStack();',
+      'const Item = () => null;',
+      'export const Nav = () => <Stack.Navigator><Item /></Stack.Navigator>;',
+    ].join('\n'),
+  });
+  try {
+    const { violations } = unusedCodeViolations(gateFiles([], root), root);
+    assert.deepEqual(violations, []);
+  } finally {
+    cleanup(root);
+  }
+});
+
 test('exported declarations are module-public and never flagged', () => {  const root = fixture({
     'api.js': [
       'const internal = 1;',
