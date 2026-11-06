@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.21.0](https://github.com/IstiN/crap4js/compare/v0.20.0...v0.21.0) (2026-11-06)
+
+
+### Features
+
+* diff-check subcommand (diff-scoped coverage/CRAP/duplication gate vs merge-base) ([78769eb](https://github.com/IstiN/crap4js/commit/78769eb1943ad22788a19b175a33386f3aed1563))
+* **duplicates:** --ignore-properties, --pairwise, JSX layout whitespace ignored; diff-check uses them; README jscpd comparison ([131888e](https://github.com/IstiN/crap4js/commit/131888eaa8ea22d63c18cfe42a0fef9fe73371cd))
+
+
+### Bug Fixes
+
+* **ts,jsx,jest:** route .ts without jsx, count JSX/expect refs, resolve tsconfig paths ([bf16fb4](https://github.com/IstiN/crap4js/commit/bf16fb47722d0f6632fa1494b41995c6d7c340cf))
+
 ## [0.20.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.19.0...v0.20.0) (2026-10-23)
 
 
