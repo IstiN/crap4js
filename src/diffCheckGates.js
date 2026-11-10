@@ -141,10 +141,15 @@ function collectFingerprints(clones) {
   for (const c of clones) {
     if (c.fingerprint) set.add(c.fingerprint);
     for (const occ of c.occurrences) {
-      if (occ.fingerprint) set.add(occ.fingerprint);
+      addOccurrenceFingerprints(set, occ);
     }
   }
   return set;
+}
+
+function addOccurrenceFingerprints(set, occ) {
+  if (occ.fingerprint) set.add(occ.fingerprint);
+  for (const w of occ.windows ?? []) set.add(w);
 }
 
 function readFileAtRef(rel, ref, cwd, spawn) {

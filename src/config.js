@@ -16,14 +16,21 @@ import {
   CRAP_GATE,
   CYCLOMATIC,
   DUPLICATES_GATE,
+  EXCLUDE,
+  EXCLUDE_DUPLICATES_OPT,
+  IGNORE_DATA_OPT,
+  IGNORE_TYPES_OPT,
   MAX_CALLBACKS_OPT,
   MAX_COMPLEXITY_OPT,
   MAX_LINES_OPT,
   MAX_PARAMS_OPT,
   METHOD_SIZE_GATE,
   METRIC_OPT,
+  MIN_LINES_OPT,
+  MIN_TOKENS_OPT,
   OBJECT,
   PACKAGE_JSON,
+  SPLIT_CALLBACKS_OPT,
   THRESHOLD_OPT,
 } from './constants.js';
 
@@ -37,7 +44,28 @@ const NUMBER_KEYS = new Set([
   MAX_CALLBACKS_OPT,
   'maxComponentLines',
   'minCoverage',
+  MIN_TOKENS_OPT,
+  MIN_LINES_OPT,
 ]);
+const BOOLEAN_OPTION_KEYS = new Set([
+  IGNORE_TYPES_OPT,
+  IGNORE_DATA_OPT,
+  'newDuplicatesOnly',
+  SPLIT_CALLBACKS_OPT,
+  'exactClones',
+  'ignoreLocals',
+  'ignoreLiterals',
+  'ignoreIdentifiers',
+  'ignoreImports',
+  'ignoreProperties',
+  'skipDuplicateFiles',
+  'pairwise',
+]);
+const ARRAY_OPTION_KEYS = new Set([
+  EXCLUDE,
+  EXCLUDE_DUPLICATES_OPT,
+]);
+const TOP_LEVEL_KEYS = [METRIC_OPT, ...NUMBER_KEYS, ...BOOLEAN_OPTION_KEYS];
 const BOOL_GATES = new Set([
   CRAP_GATE,
   COVERAGE,
@@ -199,7 +227,7 @@ export function resolvePathConfig(config, relFile, defaults = {}) {
 function pickTopLevel(config, defaults) {
   if (!config) return {};
   const out = {};
-  for (const k of [METRIC_OPT, ...NUMBER_KEYS]) {
+  for (const k of TOP_LEVEL_KEYS) {
     if (config[k] !== undefined && defaults[`explicit_${k}`] !== true) {
       out[k] = config[k];
     }
@@ -208,10 +236,33 @@ function pickTopLevel(config, defaults) {
 }
 
 function applyMatchedOverride(target, ov) {
-  for (const k of [METRIC_OPT, ...NUMBER_KEYS]) {
+  for (const k of TOP_LEVEL_KEYS) {
     if (ov[k] !== undefined) target[k] = ov[k];
   }
   if (ov.gates) Object.assign(target.gates, ov.gates);
+}
+
+/**
+ * Merge top-level config options into parsed CLI options `opts` without
+ * overwriting values explicitly passed on the CLI.
+ *
+ * @param {object} opts
+ * @param {object} config
+ * @returns {object}
+ */
+export function applyTopLevelConfig(opts, config) {
+  if (!config) return opts;
+  const top = pickTopLevel(config, opts);
+  for (const [k, v] of Object.entries(top)) {
+    if (BOOLEAN_OPTION_KEYS.has(k) && opts[k]) continue;
+    opts[k] = v;
+  }
+  for (const k of ARRAY_OPTION_KEYS) {
+    if (Array.isArray(config[k])) {
+      opts[k] = [...new Set([...config[k], ...(opts[k] ?? [])])];
+    }
+  }
+  return opts;
 }
 
 /**

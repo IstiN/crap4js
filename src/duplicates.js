@@ -38,20 +38,29 @@ import {
   CALL,
   CLASS_METHOD,
   CLASS_PRIVATE_METHOD,
+  CONFIG_OPT,
   DUPLICATES_GATE,
   EXCLUDE,
+  EXCLUDE_DUPLICATES_OPT,
   EXPORT_DEFAULT_DECLARATION,
   EXPORT_NAMED_DECLARATION,
   FUNCTION_DECLARATION,
   FUNCTION_EXPRESSION,
   IDENT,
+  IGNORE_DATA_OPT,
+  IGNORE_TYPES_OPT,
   IMPORT_DECLARATION,
   MEMBER,
+  MIN_LINES_OPT,
+  MIN_TOKENS_OPT,
+  OVERRIDE_OPT,
   STRING,
   THRESHOLD_FLAG,
   THRESHOLD_OPT,
   VARIABLE_DECLARATOR,
 } from './constants.js';
+import { applyTopLevelConfig, loadConfig } from './config.js';
+import { filterDuplicatesFiles } from './diffCheckGates.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
 import { cloneRecord, extraSkipRanges, pairGroups } from './duplicateFilters.js';
 
@@ -61,11 +70,14 @@ const DEFAULT_MIN_LINES = 5;
 
 const VALUE_FLAGS = {
   [THRESHOLD_FLAG]: THRESHOLD_OPT,
-  '--min-tokens': 'minTokens',
-  '--min-lines': 'minLines',
+  '--min-tokens': MIN_TOKENS_OPT,
+  '--min-lines': MIN_LINES_OPT,
   '--report': 'report',
   '--exclude': EXCLUDE,
+  '--exclude-duplicates': EXCLUDE_DUPLICATES_OPT,
   '--source': 'source',
+  '--config': CONFIG_OPT,
+  '--override': OVERRIDE_OPT,
 };
 const NUMBER_FLAGS = new Set([THRESHOLD_FLAG, '--min-tokens', '--min-lines']);
 // Violation styles (upstream `report: percentage|clones`): percentage is
@@ -80,8 +92,8 @@ const BOOLEAN_FLAGS = {
   '--ignore-imports': 'ignoreImports',
   '--skip-duplicate-files': 'skipDuplicateFiles',
   '--ignore-properties': 'ignoreProperties',
-  '--ignore-types': 'ignoreTypes',
-  '--ignore-data': 'ignoreData',
+  '--ignore-types': IGNORE_TYPES_OPT,
+  '--ignore-data': IGNORE_DATA_OPT,
   '--pairwise': 'pairwise',
 };
 
@@ -106,9 +118,10 @@ export function parseDuplicateArgs(argv) {
     paths: [],
   };
   for (let i = 0; i < argv.length; i++) {
-    const bool = BOOLEAN_FLAGS[argv[i]];
+    const a = argv[i];
+    const bool = BOOLEAN_FLAGS[a];
     if (bool) opts[bool] = true;
-    else i = applyGateArg(opts, argv[i], argv, i, VALUE_FLAGS, NUMBER_FLAGS);
+    else i = applyGateArg(opts, a, argv, i, VALUE_FLAGS, NUMBER_FLAGS);
   }
   if (!REPORT_MODES.has(opts.report)) {
     throw new Error(`Invalid --report: ${opts.report}`);
@@ -122,12 +135,15 @@ export function parseDuplicateArgs(argv) {
  */
 export function runDuplicates(argv, ctx) {
   const opts = parseDuplicateArgs(argv);
-  const files = scanSet(opts, ctx.cwd);
+  const configObj = loadConfig(ctx.cwd, { configPath: opts.config, overrides: opts.override });
+  const merged = applyTopLevelConfig({ ...opts }, configObj);
+  merged.exclude = [...(merged.exclude ?? []), ...(merged.excludeDuplicates ?? [])];
+  const files = filterDuplicatesFiles(scanSet(merged, ctx.cwd), ctx.cwd, configObj);
   return runCheck(
     ctx,
     files,
-    (fs, root) => duplicatesViolations(fs, root, opts),
-    (result) => duplicatesSummary(result, opts),
+    (fs, root) => duplicatesViolations(fs, root, merged),
+    (result) => duplicatesSummary(result, merged),
     DUPLICATES_GATE,
   );
 }
@@ -175,7 +191,7 @@ export function scanSet(opts, projectRoot) {
 export function duplicatesViolations(files, projectRoot, opts) {
   const bags = tokenizeFiles(files, projectRoot, opts);
   const groups = acceptGroups(bags, detectClones(bags, opts), opts.pairwise);
-  if (opts.report === 'clones') return clonesResult(bags, groups);
+  if (opts.report === 'clones') return clonesResult(bags, groups, opts.minTokens);
   const violations = [];
   let checkedLines = 0;
   let dupLines = 0;
@@ -206,8 +222,8 @@ const MASKING_KEYS = [
   'ignoreImports',
   'skipDuplicateFiles',
   'ignoreProperties',
-  'ignoreTypes',
-  'ignoreData',
+  IGNORE_TYPES_OPT,
+  IGNORE_DATA_OPT,
 ];
 
 function tokenizeFiles(files, projectRoot, opts) {
@@ -680,7 +696,7 @@ function extentOf(cur, curStart, ref, refStart, minTokens) {
 
 // One violation per accepted clone group, every occurrence location in
 // the message (PMD CPD style); at most three locations inline.
-function clonesResult(bags, groups) {
+function clonesResult(bags, groups, minTokens = DEFAULT_MIN_TOKENS) {
   const violations = groups.map((group) => {
     const [refBag, refStart, refEnd] = group[0];
     const locations = group.map(([b, s, e]) =>
@@ -698,7 +714,7 @@ function clonesResult(bags, groups) {
   });
   return {
     violations,
-    clones: groups.map((group) => cloneRecord(bags, group)),
+    clones: groups.map((group) => cloneRecord(bags, group, minTokens)),
     checked: bags.length,
     totalPercent: totalPercent(bags),
   };

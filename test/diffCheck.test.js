@@ -324,14 +324,23 @@ test('runDiffCheck e2e: --exclude-duplicates, --ignore-data, and --new-duplicate
     const newOnlyRes = run(root, ['--no-coverage-gate', '--no-crap-gate', '--new-duplicates-only']);
     assert.equal(newOnlyRes.code, 0, 'new-duplicates-only ignores pre-existing duplicate from base');
 
-    const exclDupRes = run(root, ['--no-coverage-gate', '--no-crap-gate', '--exclude-duplicates', 'src/dupA.js']);
+    // Grow the pre-existing clone by adding a new statement in the middle of both copies (Issue #7)
+    const grownBody = (name) => complexFn(name).replace('  if (b === 4) {', '  if (a === 42) { return 99; }\n  if (b === 4) {');
+    write(root, 'src/dupA.js', grownBody('dupOne'));
+    write(root, 'src/dupB.js', grownBody('dupTwo'));
+    const grownStrict = run(root, ['--no-coverage-gate', '--no-crap-gate', '--no-method-size-gate', '--no-loc-gate']);
+    assert.equal(grownStrict.code, 2, 'strict mode flags grown clone');
+    const grownNewOnly = run(root, ['--no-coverage-gate', '--no-crap-gate', '--no-method-size-gate', '--no-loc-gate', '--new-duplicates-only']);
+    assert.equal(grownNewOnly.code, 0, 'new-duplicates-only ignores grown pre-existing clone');
+
+    const exclDupRes = run(root, ['--no-coverage-gate', '--no-crap-gate', '--exclude-duplicates', 'src/dupA.js', '--exclude-duplicates', 'src/dupB.js']);
     assert.equal(exclDupRes.code, 0, 'exclude-duplicates skips file from duplication gate');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('runDiffCheck e2e: diff-scoped method-size, loc, and component-size gates (Issues #1, #6)', () => {
+test('runDiffCheck e2e: diff-scoped method-size, loc, and component-size gates and summary counts (Issues #1, #6, #7)', () => {
   const root = repo();
   try {
     const bigComponent = [
@@ -354,8 +363,22 @@ test('runDiffCheck e2e: diff-scoped method-size, loc, and component-size gates (
     assert.match(r.text, /\[method-size\] src\/HugeCard\.tsx:1: HugeCard has 7 params > max 4/);
     assert.match(r.text, /\[loc\] src\/HugeCard\.tsx:1: 5 lines > max 3/);
     assert.match(r.text, /\[component-size\] src\/HugeCard\.tsx:1: HugeCard has 2 callbacks\/hooks > max 1/);
+    assert.match(r.text, /1 methods over 60 lines\/4 params; 1 files over 3 lines; 1 components over size/);
+
+    // Top-level config options in crap4js.config.json (Issue #7)
+    write(root, 'crap4js.config.json', JSON.stringify({
+      exclude: ['src/HugeCard.tsx'],
+      ignoreTypes: true,
+      ignoreData: true,
+      newDuplicatesOnly: true,
+      splitCallbacks: true,
+    }));
+    const excludedByCfg = run(root, ['--no-coverage-gate', '--no-crap-gate', '--no-duplicates-gate']);
+    assert.equal(excludedByCfg.code, 0, excludedByCfg.text);
+    assert.match(excludedByCfg.text, /no changed source lines/);
 
     // Disable the new gates with --no-*-gate flags
+    write(root, 'crap4js.config.json', '{}');
     const off = run(root, [
       '--no-coverage-gate',
       '--no-crap-gate',

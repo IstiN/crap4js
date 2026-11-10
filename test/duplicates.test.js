@@ -1101,16 +1101,21 @@ export const keep = 1;
   }
 });
 
-test('--ignore-data skips pure literal data objects, arrays, and translation maps (Issue #3)', () => {
+test('--ignore-data skips pure literal data objects, arrays, concatenated strings, and per-property data in mixed objects (Issues #3, #7)', () => {
   const makeI18n = (lang) => `export default {
   'profile.title': '${lang}_title',
   'profile.signOut': '${lang}_signOut',
   'profile.confirm': '${lang}_confirm',
   'profile.cancel': '${lang}_cancel',
   'profile.retry': '${lang}_retry',
+  'profile.long':
+    '${lang}_first part ' +
+    '${lang}_second part ' +
+    \`${lang}_third\`,
   'profile.count': -1,
   'profile.tags': ['a', 'b', \`plain\`],
   nested: { ok: true, empty: null },
+  formatter: ${lang === 'en' ? '(n: number) => String(n)' : '() => false'},
 } as const;
 export const FLAT = { A: '1', B: '2', C: '3', D: '4', E: '5' };
 `;

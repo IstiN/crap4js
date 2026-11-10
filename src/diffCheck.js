@@ -27,22 +27,29 @@ import {
   DEFAULT_MAX_COMPONENT_COMPLEXITY,
   DEFAULT_MAX_COMPONENT_LINES,
 } from './componentSize.js';
-import { isGateEnabled, loadConfig, resolvePathConfig } from './config.js';
+import { applyTopLevelConfig, isGateEnabled, loadConfig, resolvePathConfig } from './config.js';
 import {
   COGNITIVE,
+  COMPONENT_SIZE_GATE,
   CONFIG_OPT,
   COVERAGE,
   CRAP_GATE,
   CYCLOMATIC,
   DEFAULT_COVERAGE,
   EXCLUDE,
+  EXCLUDE_DUPLICATES_OPT,
   EXPLAIN_OPT,
+  IGNORE_DATA_OPT,
+  IGNORE_TYPES_OPT,
   MAX_CALLBACKS_OPT,
   MAX_COMPLEXITY_OPT,
   MAX_LINES_FLAG,
   MAX_LINES_OPT,
   MAX_PARAMS_OPT,
+  METHOD_SIZE_GATE,
   METRIC_OPT,
+  MIN_LINES_OPT,
+  MIN_TOKENS_OPT,
   OVERRIDE_OPT,
   SPLIT_CALLBACKS_OPT,
   STRING,
@@ -61,7 +68,7 @@ import {
 import { diffIntersects, parseDiffLineMap } from './diffLines.js';
 import { duplicatesViolations, scanSet } from './duplicates.js';
 import { formatExplanation } from './explain.js';
-import { UTF8, gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, globToRegExp, toRelPath } from './files.js';
 import { applyGateArg } from './gateCommon.js';
 import { MAX_LINES as DEFAULT_MAX_LOC } from './loc.js';
 
@@ -87,8 +94,8 @@ const VALUE_FLAGS = {
   [THRESHOLD_FLAG]: THRESHOLD_OPT,
   '--metric': METRIC_OPT,
   '--min-coverage': 'minCoverage',
-  '--min-tokens': 'minTokens',
-  '--min-lines': 'minLines',
+  '--min-tokens': MIN_TOKENS_OPT,
+  '--min-lines': MIN_LINES_OPT,
   [MAX_LINES_FLAG]: MAX_LINES_OPT,
   '--max-method-lines': 'maxMethodLines',
   '--max-params': MAX_PARAMS_OPT,
@@ -96,7 +103,7 @@ const VALUE_FLAGS = {
   '--max-callbacks': MAX_CALLBACKS_OPT,
   '--max-component-lines': 'maxComponentLines',
   '--exclude': EXCLUDE,
-  '--exclude-duplicates': 'excludeDuplicates',
+  '--exclude-duplicates': EXCLUDE_DUPLICATES_OPT,
   '--config': CONFIG_OPT,
   '--override': OVERRIDE_OPT,
 };
@@ -120,8 +127,8 @@ const BOOLEAN_FLAGS = {
   '--warn-only': 'warnOnly',
   '--github': 'github',
   '--exact-clones': 'exactClones',
-  '--ignore-types': 'ignoreTypes',
-  '--ignore-data': 'ignoreData',
+  '--ignore-types': IGNORE_TYPES_OPT,
+  '--ignore-data': IGNORE_DATA_OPT,
   '--new-duplicates-only': 'newDuplicatesOnly',
   '--split-callbacks': SPLIT_CALLBACKS_OPT,
   '--explain': EXPLAIN_OPT,
@@ -188,14 +195,19 @@ export function parseDiffCheckArgs(argv) {
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === THRESHOLD_FLAG || a.startsWith(`${THRESHOLD_FLAG}=`)) opts.explicit_threshold = true;
-    if (a === '--metric' || a.startsWith('--metric=')) opts.explicit_metric = true;
+    markExplicitArg(opts, a);
     const bool = BOOLEAN_FLAGS[a];
     if (bool) opts[bool] = true;
     else i = applyGateArg(opts, a, argv, i, VALUE_FLAGS, NUMBER_FLAGS);
   }
   validateDiffCheckOpts(opts);
   return opts;
+}
+
+function markExplicitArg(opts, a) {
+  for (const [flag, key] of Object.entries(VALUE_FLAGS)) {
+    if (a === flag || a.startsWith(`${flag}=`)) opts[`explicit_${key}`] = true;
+  }
 }
 
 function validateDiffCheckOpts(opts) {
@@ -372,18 +384,23 @@ export function cloneViolations(clones, changed, baseFingerprints = null) {
 
 function isPreExistingClone(clone, occ, baseFingerprints) {
   if (!baseFingerprints) return false;
-  return baseFingerprints.has(clone.fingerprint) || baseFingerprints.has(occ.fingerprint);
+  if (baseFingerprints.has(clone.fingerprint) || baseFingerprints.has(occ.fingerprint)) {
+    return true;
+  }
+  return Boolean(occ.windows?.some((w) => baseFingerprints.has(w)));
 }
 
 function cloneViolation(clone, occ) {
   const others = clone.occurrences
     .filter((o) => o !== occ)
     .map((o) => `${o.file}:${o.startLine}-${o.endLine}`);
+  const tokens = occ.tokens ?? clone.tokens;
+  const lines = occ.lines ?? clone.lines;
   return {
     rule: 'duplication',
     file: occ.file,
     line: occ.startLine,
-    message: `duplicated code (${clone.tokens} tokens / ${clone.lines} lines) also at ${others.slice(0, 3).join('; ')}${others.length > 3 ? ` (+${others.length - 3} more)` : ''}`,
+    message: `duplicated code (${tokens} tokens / ${lines} lines) also at ${others.slice(0, 3).join('; ')}${others.length > 3 ? ` (+${others.length - 3} more)` : ''}`,
   };
 }
 
@@ -421,7 +438,10 @@ function detectClones(opts, ctx, base, configObj) {
 }
 
 function sourceCandidates(opts, ctx) {
-  return gateFiles(opts.paths, ctx.cwd).map((f) => toRelPath(f, ctx.cwd));
+  const globs = (opts.exclude ?? []).map(globToRegExp);
+  return gateFiles(opts.paths, ctx.cwd)
+    .map((f) => toRelPath(f, ctx.cwd))
+    .filter((rel) => !globs.some((g) => g.test(rel)));
 }
 
 function crapStep(opts, ctx, changed, configObj) {
@@ -474,8 +494,17 @@ function summary(opts, base, changed, { violations, coverage }) {
   const cov = coverage
     ? `changed-lines coverage ${coverage.percent.toFixed(1)}% (${coverage.covered}/${coverage.total}, need >= ${opts.minCoverage}%)`
     : 'coverage gate off';
+  const extra = extraGateSummary(opts, by);
   return `diff-check vs ${base.slice(0, 8)} (${opts.base}): ${changed.size} changed source files; ${cov}; ` +
-    `${by(CRAP_GATE)} functions over CRAP ${opts.threshold}; ${by('duplication')} duplicated blocks`;
+    `${by(CRAP_GATE)} functions over CRAP ${opts.threshold}; ${by('duplication')} duplicated blocks${extra}`;
+}
+
+function extraGateSummary(opts, by) {
+  const parts = [];
+  if (by(METHOD_SIZE_GATE) > 0) parts.push(`${by(METHOD_SIZE_GATE)} methods over ${opts.maxMethodLines} lines/${opts.maxParams} params`);
+  if (by('loc') > 0) parts.push(`${by('loc')} files over ${opts.maxLines} lines`);
+  if (by(COMPONENT_SIZE_GATE) > 0) parts.push(`${by(COMPONENT_SIZE_GATE)} components over size`);
+  return parts.length > 0 ? '; ' + parts.join('; ') : '';
 }
 
 function report(opts, ctx, violations) {
@@ -500,6 +529,7 @@ export function runDiffCheck(argv, ctx) {
     return 0;
   }
   const configObj = loadConfig(ctx.cwd, { configPath: opts.config, overrides: opts.override });
+  applyTopLevelConfig(opts, configObj);
   const base = mergeBase(opts.base, ctx.cwd);
   const changed = changedLineMap(base, sourceCandidates(opts, ctx), ctx.cwd);
   if (changed.size === 0) {

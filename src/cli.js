@@ -155,7 +155,7 @@ import { parseProfileArgs, runProfile } from './profile.js';
 import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
 import { isMain } from './mainGuard.js';
-import { loadConfig, resolvePathConfig } from './config.js';
+import { applyTopLevelConfig, loadConfig, resolvePathConfig } from './config.js';
 import {
   COGNITIVE,
   CONFIG_OPT,
@@ -573,17 +573,19 @@ function dispatchSubcommand(argv, ctx) {
 }
 
 function runWithOpts(opts, ctx) {
+  const config = tryStep(ctx, () => loadConfig(ctx.cwd, { configPath: opts.config, overrides: opts.override }));
+  if (config === FAIL) return 1;
+  applyTopLevelConfig(opts, config);
   if (opts.runTests && tryStep(ctx, () => runTests(ctx.cwd)) === FAIL) return 1;
   const inputs = resolveRunInputs(opts, ctx);
   if (inputs === null) return 1;
   if (inputs.files.length === 0) return 0;
-  const result = tryStep(ctx, () => executeAnalysis(opts, inputs, ctx));
+  const result = tryStep(ctx, () => executeAnalysis(opts, inputs, ctx, config));
   if (result === FAIL) return 1;
   return renderAndVerdict(result, opts, inputs, ctx);
 }
 
-function executeAnalysis(opts, inputs, ctx) {
-  const config = loadConfig(ctx.cwd, { configPath: opts.config, overrides: opts.override });
+function executeAnalysis(opts, inputs, ctx, config) {
   const topCfg = resolvePathConfig(config, '', {
     explicit_threshold: opts.threshold !== undefined,
     explicit_metric: opts.metric !== undefined,

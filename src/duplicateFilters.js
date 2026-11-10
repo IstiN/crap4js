@@ -8,6 +8,7 @@
 //     config maps).
 
 import {
+  BINARY_EXPRESSION,
   BOOLEAN_LITERAL,
   EXPORT_DEFAULT_DECLARATION,
   EXPORT_NAMED_DECLARATION,
@@ -76,7 +77,19 @@ function collectDataRanges(node, ranges) {
     ranges.push([node.start, node.end]);
     return;
   }
+  if (node.type === 'ObjectExpression') {
+    collectObjectDataRanges(node.properties, ranges);
+  }
   for (const c of childrenOf(node)) collectDataRanges(c, ranges);
+}
+
+function collectObjectDataRanges(props, ranges) {
+  for (let i = 0; i < props.length; i++) {
+    const p = props[i];
+    if (!isPureDataProperty(p)) continue;
+    const end = i + 1 < props.length ? props[i + 1].start : p.end;
+    ranges.push([p.start, end]);
+  }
 }
 
 function isDataStatement(node) {
@@ -124,7 +137,12 @@ function isPureDataValue(node) {
   if (!u) return false;
   if (DATA_LITERALS.has(u.type) || isPlainTemplate(u)) return true;
   if (isSignedLiteral(u)) return isPureDataValue(u.argument);
+  if (isDataBinaryConcat(u)) return true;
   return isPureDataContainer(u);
+}
+
+function isDataBinaryConcat(u) {
+  return u.type === BINARY_EXPRESSION && u.operator === '+' && isPureDataValue(u.left) && isPureDataValue(u.right);
 }
 
 function isPlainTemplate(u) {
@@ -182,27 +200,40 @@ function maximalPair(bags, [b1, s1], [b2, s2], codes, { minTokens, minLines }, e
  * @param {Array<[number, number, number]>} group
  * @returns {{ tokens: number, lines: number, fingerprint: string, occurrences: object[] }}
  */
-export function cloneRecord(bags, group) {
-  const [refBag, refStart, refEnd] = group[0];
+export function cloneRecord(bags, group, minTokens = 50) {
+  const widened = group.map((_occ, i) => widenOccurrence(bags, group, i));
+  const [refBag, refStart, refEnd] = widened[0];
   const ref = bags[refBag].tokens;
   const fingerprint = ref.slice(refStart, refEnd).map((t) => t.value).join('\u0000');
   return {
     tokens: refEnd - refStart,
     lines: ref[refEnd - 1].line - ref[refStart].line + 1,
     fingerprint,
-    occurrences: group.map((_occ, i) => buildOccurrence(bags, group, i)),
+    occurrences: widened.map((w) => buildOccurrence(bags, w, minTokens)),
   };
 }
 
-function buildOccurrence(bags, group, i) {
-  const [b, s, e] = widenOccurrence(bags, group, i);
+function buildOccurrence(bags, [b, s, e], minTokens) {
   const occTokens = bags[b].tokens;
+  const values = occTokens.slice(s, e).map((t) => t.value);
   return {
     file: bags[b].rel,
     startLine: occTokens[s].line,
     endLine: occTokens[e - 1].line,
-    fingerprint: occTokens.slice(s, e).map((t) => t.value).join('\u0000'),
+    tokens: e - s,
+    lines: occTokens[e - 1].line - occTokens[s].line + 1,
+    fingerprint: values.join('\u0000'),
+    windows: slidingFingerprints(values, minTokens),
   };
+}
+
+function slidingFingerprints(values, minTokens) {
+  const win = Math.max(1, Math.min(minTokens, values.length));
+  const out = [];
+  for (let i = 0; i + win <= values.length; i++) {
+    out.push(values.slice(i, i + win).join('\u0000'));
+  }
+  return out;
 }
 
 function sameToken(a, b) {

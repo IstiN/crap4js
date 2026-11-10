@@ -66,6 +66,7 @@ export const BLOCK_STATEMENT = 'BlockStatement';
 export const TRY_STATEMENT = 'TryStatement';
 export const CONDITIONAL_EXPRESSION = 'ConditionalExpression';
 export const LOGICAL_EXPRESSION = 'LogicalExpression';
+export const BINARY_EXPRESSION = 'BinaryExpression';
 
 // Complexity metric names.
 export const COGNITIVE = 'cognitive';
@@ -92,6 +93,11 @@ export const MAX_LINES_FLAG = '--max-lines';
 export const MAX_PARAMS_OPT = 'maxParams';
 export const MAX_COMPLEXITY_OPT = 'maxComplexity';
 export const MAX_CALLBACKS_OPT = 'maxCallbacks';
+export const MIN_TOKENS_OPT = 'minTokens';
+export const MIN_LINES_OPT = 'minLines';
+export const IGNORE_TYPES_OPT = 'ignoreTypes';
+export const IGNORE_DATA_OPT = 'ignoreData';
+export const EXCLUDE_DUPLICATES_OPT = 'excludeDuplicates';
 export const SEVERITY_OPT = 'severity';
 export const WARNING_SEV = 'warning';
 export const ERROR_SEV = 'error';
