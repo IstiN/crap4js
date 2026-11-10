@@ -24,8 +24,15 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
+import {
+  ARROW_FUNCTION_EXPRESSION,
+  CLASS_METHOD,
+  CLASS_PRIVATE_METHOD,
+  FUNCTION_DECLARATION,
+  FUNCTION_EXPRESSION,
+} from './complexity.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
 
 const MAX_FIELDS = 5;
@@ -41,11 +48,11 @@ const ANON_SHAPE_TYPES = new Set([
 // Function-like declarations whose parameter/return annotations form a
 // signature (TSDeclareFunction = bodyless overload declaration).
 const SIGNATURE_TYPES = new Set([
-  'FunctionDeclaration',
-  'FunctionExpression',
-  'ArrowFunctionExpression',
-  'ClassMethod',
-  'ClassPrivateMethod',
+  FUNCTION_DECLARATION,
+  FUNCTION_EXPRESSION,
+  ARROW_FUNCTION_EXPRESSION,
+  CLASS_METHOD,
+  CLASS_PRIVATE_METHOD,
   'ObjectMethod',
   'TSDeclareFunction',
 ]);
@@ -135,7 +142,7 @@ export function inlineAnonTypesViolations(files, projectRoot, opts = {}) {
   const violations = [];
   let checked = 0;
   for (const file of files) {
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     const { shapes, signatures } = signatureShapes(ast.program);
     checked += signatures;
     for (const s of shapes) {
@@ -187,5 +194,6 @@ export function runInlineAnonTypes(argv, ctx) {
     gateFiles(opts.paths, ctx.cwd),
     (fs, root) => inlineAnonTypesViolations(fs, root, opts),
     inlineAnonTypesSummary,
+    'inline-anon-types',
   );
 }

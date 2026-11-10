@@ -3,15 +3,23 @@
 
 import { readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { childrenOf, isNode } from './complexity.js';
-import { toRelPath } from './files.js';
+import {
+  CALL,
+  EXPORT_NAMED_DECLARATION,
+  IDENT,
+  IMPORT_DECLARATION,
+  STRING_LITERAL,
+  childrenOf,
+  isNode,
+} from './complexity.js';
+import { SOURCE_EXTENSIONS, UTF8, toRelPath } from './files.js';
+import { STRING } from './constants.js';
 
 // Extensions tried when resolving an extensionless relative specifier,
 // including React Native / Metro platform-specific variants.
-const BASE_EXTS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx'];
 const SOURCE_EXTS = [
-  ...BASE_EXTS,
-  ...BASE_EXTS.flatMap((e) => [`.ios${e}`, `.android${e}`, `.native${e}`]),
+  ...SOURCE_EXTENSIONS,
+  ...SOURCE_EXTENSIONS.flatMap((e) => [`.ios${e}`, `.android${e}`, `.native${e}`]),
 ];
 const aliasCache = new Map();
 
@@ -37,9 +45,9 @@ export function collectImports(program) {
 
 // Static import/export forms: the specifier lives in node.source.
 const SOURCE_FORMS = new Set([
-  'ImportDeclaration',
+  IMPORT_DECLARATION,
   'ExportAllDeclaration',
-  'ExportNamedDeclaration',
+  EXPORT_NAMED_DECLARATION,
 ]);
 
 // The specifier a node carries, or null when the node is not an import.
@@ -47,13 +55,13 @@ function importSpecifierOf(n) {
   // Babel 8 parses dynamic import() as ImportExpression; older parsers
   // produce a CallExpression with an Import/require callee.
   if (n.type === 'ImportExpression') return literalValue(n.source);
-  if (n.type === 'CallExpression') return literalArg(n);
+  if (n.type === CALL) return literalArg(n);
   if (SOURCE_FORMS.has(n.type)) return n.source?.value ?? null;
   return null;
 }
 
 function isRequireLike(callee) {
-  return callee.type === 'Import' || (callee.type === 'Identifier' && callee.name === 'require');
+  return callee.type === 'Import' || (callee.type === IDENT && callee.name === 'require');
 }
 
 function literalArg(call) {
@@ -61,7 +69,7 @@ function literalArg(call) {
 }
 
 function literalValue(node) {
-  return node?.type === 'StringLiteral' ? node.value : null;
+  return node?.type === STRING_LITERAL ? node.value : null;
 }
 
 // Strip `//` and `/* ... */` comments outside JSON string literals so
@@ -75,7 +83,7 @@ function stripJsonComments(text) {
 function parseTsconfigPaths(projectRoot) {
   for (const name of ['tsconfig.json', 'jsconfig.json']) {
     try {
-      const raw = readFileSync(path.join(projectRoot, name), 'utf8');
+      const raw = readFileSync(path.join(projectRoot, name), UTF8);
       return JSON.parse(stripJsonComments(raw)).compilerOptions ?? null;
     } catch {
       // try next
@@ -86,7 +94,7 @@ function parseTsconfigPaths(projectRoot) {
 
 function toAliasRule(baseDir, pattern, targets) {
   const t = Array.isArray(targets) ? targets[0] : null;
-  if (!pattern.endsWith('/*') || typeof t !== 'string' || !t.endsWith('/*')) return null;
+  if (!pattern.endsWith('/*') || typeof t !== STRING || !t.endsWith('/*')) return null;
   return {
     prefix: pattern.slice(0, -1),
     targetDir: path.resolve(baseDir, t.slice(0, -2)),

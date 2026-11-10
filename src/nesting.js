@@ -6,7 +6,7 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck } from './gateCommon.js';
 import { childrenOf, extractMethodsWithNodes, isNode } from './complexity.js';
 
@@ -67,7 +67,7 @@ export function nestingViolations(files, projectRoot) {
   const violations = [];
   let checked = 0;
   for (const file of files) {
-    const source = readFileSync(file, 'utf8');
+    const source = readFileSync(file, UTF8);
     for (const m of extractMethodsWithNodes(source, { ext: path.extname(file) })) {
       checked++;
       const depth = maxNesting(m.node.body);
@@ -97,5 +97,5 @@ export function nestingSummary({ violations, checked }) {
  * The `nesting` command body. Returns exit code 2 iff violations exist.
  */
 export function runNesting(paths, ctx) {
-  return runCheck(ctx, gateFiles(paths, ctx.cwd), nestingViolations, nestingSummary);
+  return runCheck(ctx, gateFiles(paths, ctx.cwd), nestingViolations, nestingSummary, 'nesting');
 }

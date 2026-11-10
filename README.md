@@ -53,6 +53,23 @@ crap4js --changed        Analyze git-changed source files under src/.
 crap4js <path>...        Analyze explicit files / directories (expanded).
 crap4js --help           Print this help and exit 0.
 crap4js --coverage <p>   Override coverage file (default: coverage/coverage-final.json).
+                         A path ending in .info parses as an lcov tracefile
+                         (what c8/Bun emit) instead of Istanbul JSON.
+                         A missing, unparseable, or record-free coverage file
+                         fails the run (exit 1): unit-test coverage is
+                         required — a CRAP score without coverage is
+                         meaningless. Generate it with
+                         `npx c8 --reporter=json node --test`.
+crap4js --diff-base REF  Analyze only the functions intersecting lines
+                         added/changed vs git ref REF (renames use the new
+                         path; explicit paths scope the diff; mutually
+                         exclusive with --changed).
+crap4js --strict         Selected files with no coverage entry count as
+                         0.0% covered instead of N/A, and explicit paths
+                         must exist (exit 1 otherwise).
+crap4js --exclude GLOB   Skip files whose project-relative path matches
+                         GLOB (repeatable, same glob rules as the gate
+                         subcommands).
 crap4js --threshold <n>  Override CRAP threshold (default: 8.0).
 crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;
                          the chosen value feeds the CRAP formula.
@@ -70,6 +87,13 @@ crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
 crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
+crap4js scattered-constants [--min-files N] [--min-length N] [--min-value N]
+                         [--ignore VALUE]... [--exclude GLOB]...
+                         [--aliases|--no-aliases] [paths...]
+                         Flag literals whose value repeats across distinct
+                         files; existing const declarations regress
+                         immediately, private `const _x = kY;` pure aliases
+                         always.
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    [--report percentage|clones] [--ignore-locals]
                    [--ignore-literals] [--ignore-identifiers]
@@ -89,7 +113,11 @@ crap4js inline-anon-types [--max-fields N] [paths...]
                          in function signature annotations, incl. nested
                          in type arguments; plain .js has no type syntax,
                          so it is a no-op there.
-crap4js folder-structure Flag src/ directories with loose direct files.
+crap4js folder-structure [--dir GLOB]... [--max-loose-files N]
+                         [--cap PATTERN:N]... [--exclude GLOB]...
+                         Flag directories over their cap of loose
+                         (direct) source files; --cap gives per-pattern
+                         caps (first pattern wins).
 crap4js mutation [--min-score N] [--max-survivors N]
                  [--timeout-seconds N] [--max-mutants N]
                  [--cache|--no-cache] [--test-args ARG]...
@@ -110,20 +138,92 @@ crap4js memory [--top N] [--format console|json] [--badge PATH]
                           Run the test suite under node --trace-gc and
                           report per-test allocation churn and heap
                           growth (informational — always exits 0).
+crap4js reorder [--dry-run] [paths...]
+                         Rewrite class members into the canonical order
+                         (deterministic; same-kind order kept).
+crap4js string-hazards [--severity warning|error] [paths...]
+                         Flag string literals whose escaping or pattern
+                         usage contradicts the intent: escaped template
+                         interpolations (\${name} with sibling ${name}
+                         evidence), RegExp sources with an escaped
+                         anchor (/...\$/), and ^/$ anchors in STRING
+                         patterns of replace/replaceAll/split. Warning
+                         by default — findings exit 0; --severity
+                         error exits 2.
+crap4js identical-branches [--severity warning|error] [paths...]
+                         Flag the copy-paste-edit bug family — duplicate
+                         conditions/branch bodies in one if/else-if
+                         chain, duplicate operands in one &&/|| chain
+                         (absorption included), identical ternary
+                         branches, duplicate positional call arguments,
+                         duplicate catch/finally bodies — all compared
+                         by canonical form (whitespace-, comment- and
+                         parenthesis-insensitive; commutative operands
+                         sorted; same-operator nests flattened).
+                         Warning by default — findings exit 0;
+                         --severity error exits 2.
+crap4js collapsible-flow [--severity warning|error] [paths...]
+                         Flag control-flow nesting a mechanical rewrite
+                         can flatten: nested if without else merging
+                         into one && condition, redundant else after an
+                         always-exiting then branch (return/break/
+                         continue/throw), and else-if chains after a
+                         terminal then (hint only — guard clauses or a
+                         dispatch table). Warning by default — findings
+                         exit 0; --severity error exits 2.
+crap4js non-null-assertion [--severity warning|error] [paths...]
+                         Flag every TS non-null assertion (x!,
+                         obj['k']!, chains a!.b!) in .ts/.tsx files —
+                         a bang crashes on null; ?. / ?? carry the
+                         same intent with a readable check (!=, !x,
+                         ++/--, ?. and ?? are not flagged). Warning by
+                         default — findings exit 0; --severity error
+                         exits 2.
+crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]
+                         Fail files longer than N lines (default 800);
+                         --exclude drops files from the check entirely.
+crap4js method-size [--max-lines N] [--max-params N] [paths...]
+                         Fail methods longer than N body lines
+                         (default 60) or with more than N params
+                         (default 6); constructors are checked for the
+                         parameter count only.
+crap4js public-docs [--exclude GLOB]... [paths...]
+                         Fail exported functions/classes and the public
+                         methods of exported classes lacking an adjacent
+                         /** */ JSDoc block.
+crap4js test-coverage [--min-percent F] [--coverage PATH]
+                      [--exclude GLOB]... [paths...]
+                         Fail when the total statement coverage of the
+                         selection (from the CRAP coverage input) is
+                         below F% (default 80.0); a missing or empty
+                         coverage input fails (exit 1).
+crap4js complexity [--metric cyclomatic|cognitive] [--max N] [paths...]
+                         Fail functions whose complexity exceeds N
+                         (default 10): the cyclomatic path count (CC)
+                         by default, or the cognitive score with
+                         --metric cognitive.
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
-`--changed` is mutually exclusive with explicit paths. Unknown flags are a
-usage error.
+`--changed` is mutually exclusive with explicit paths, and `--diff-base` is
+mutually exclusive with `--changed`. Unknown flags are a usage error.
 
 The gate-check subcommands (`file-naming`, `nesting`, `class-size`,
 `weight-of-class`, `unused-code`, `unused-files`, `banned-imports`,
-`magic-constants`, `duplicates`, `similarity`, `test-assertions`,
-`inline-anon-types`, `folder-structure`, `mutation`) are ports of
+`magic-constants`, `scattered-constants`, `duplicates`, `similarity`,
+`test-assertions`, `inline-anon-types`, `folder-structure`, `mutation`,
+`string-hazards`, `identical-branches`, `collapsible-flow`,
+`non-null-assertion`, `loc`, `method-size`, `public-docs`,
+`test-coverage`, `complexity`)
+are ports of
 crap4dart gates. crap4js has no gate framework or config
 file, so each gate is a subcommand with its default thresholds and the
 shared exit-code contract: `0` pass/skip, `1` usage error, `2` violations
-(`similarity` is informational and always exits 0 — see its section).
+(`similarity` is informational and always exits 0 — see its section;
+`string-hazards`, `identical-branches`, `collapsible-flow`, and
+`non-null-assertion` default
+to warning severity, where findings are printed but exit 0, and
+`--severity error` restores exit 2 — see their sections).
 
 ### Example
 
@@ -151,7 +251,7 @@ Max CRAP: 30.0 (threshold 8.0) — FAILED
 | Code | Meaning                                                                       |
 |------|-------------------------------------------------------------------------------|
 | `0`  | Success (empty selection, or max numeric CRAP ≤ threshold).                   |
-| `1`  | CLI usage error (bad flag, bad threshold value, `--changed` + paths, etc.).   |
+| `1`  | CLI usage error (bad flag, bad threshold value, `--changed` + paths, `--diff-base` + `--changed`, unknown git ref, missing/unparseable/record-free coverage, or — under `--strict` — a missing explicit path). |
 | `2`  | CRAP threshold exceeded (max numeric CRAP > threshold).                       |
 
 ## Coverage format
@@ -177,9 +277,45 @@ the method's coverage and CRAP are `N/A`. Absolute file-path keys are
 relativised against the project root; entries outside the project root are
 ignored.
 
-If the coverage file is missing, a warning is printed to stderr (including
-the command to generate it — `npx c8 --reporter=json node --test`) and every
-method is reported with `N/A` coverage and CRAP.
+An `--coverage` path ending in `.info` is parsed as an **lcov tracefile**
+(the format `npx c8 --reporter=lcov` and `bun test --coverage` emit), so CI
+setups that produce only lcov work without conversion. Each `DA:<line>,<hits>`
+record becomes one single-line statement; two `SF:` records for the same file
+sum their hits per line; function/branch records (`FN`, `FNDA`, `BRDA`, `LF`,
+`LH`) are ignored. Relative `SF:` paths resolve against the project root,
+absolute paths use the same relativisation as the JSON keys above. The
+resulting per-file data is identical in shape to the Istanbul JSON, so
+reports produced from either format of the same coverage run are
+byte-identical.
+
+Unit-test coverage is **required**: if the coverage file is missing,
+unparseable, or contains no records for this project, `crap4js` fails with
+exit 1, printing an actionable error to stderr (including the command to
+generate coverage — `npx c8 --reporter=json node --test`) and no report —
+a CRAP score without coverage is meaningless. Breaking change: earlier
+releases degraded to per-method `N/A` rows with a stderr warning and
+exit 0. Under `--strict`, a selected file with no coverage entry is
+additionally scored as 0.0% covered rather than `N/A`, and explicit
+paths must exist.
+
+## `--diff-base`
+
+`crap4js --diff-base REF` scopes the CRAP report to the change under review:
+it runs `git diff --unified=0 REF -- <paths>` and keeps only the functions
+whose `[startLine, endLine]` intersects an added or changed line (the same
+plumbing the `mutation` gate uses). Renames select under the new path; a
+function whose lines were only deleted is dropped. It combines with explicit
+paths (they scope the diff) but not with `--changed` (usage error, exit 1);
+an unknown ref or any git failure exits 1; when the selection keeps no
+function at all, the usual "No JavaScript files to analyze." empty report is
+printed and the run exits 0.
+
+## `--exclude`
+
+`crap4js --exclude GLOB` (repeatable) removes files from the analysis before
+any parsing: a file is skipped when its project-relative path matches GLOB,
+using the same glob rules as the gate subcommands (`*` within one path
+segment, `**` across segments, `?` one character).
 
 ## `--run-tests`
 
@@ -389,6 +525,76 @@ are baked in (min_duplicates=3, min_length=4, hex rule on) — crap4js has
 no config. Any `--flag` argument is a usage error (exit 1). Exit 2 iff
 violations exist.
 
+## `scattered-constants`
+
+`crap4js scattered-constants [--min-files N] [--min-length N]
+[--min-value N] [--ignore VALUE]... [--exclude GLOB]... [paths...]` (port
+of crap4dart e766d68's scattered_constants gate, v2) is the corpus-wide
+sibling of `magic-constants`: that gate counts in-file repeats only, so a
+literal used once per file in K files is invisible to it — the "change
+`86400` in every service" hazard. Two finding kinds on whole literal
+values:
+
+- **Constant regression** — a `const` with the value already exists
+  anywhere in the corpus: every hardcoded re-introduction (a bare literal
+  or a duplicate local const, any occurrence count, even in the declaring
+  file) is flagged immediately as `hardcoded <value> duplicates constant
+  \`NAME\` (file:line) — reference the constant instead of repeating the
+  literal`. No `--min-files` wait — the fact has a home; you do not get
+  to re-hardcode it while the gate is silent. The first declaration wins
+  when constants share a value; the winning declaration's own site never
+  flags itself.
+- **Scattered literal** — no constant exists yet and the value appears in
+  `--min-files` (default 3) distinct files: one violation per occurrence,
+  `literal <value> repeats in N files (M occurrences) — extract a shared
+  constant and reference it from every site; verify all occurrences mean
+  the same thing first` (the same value is sometimes coincidence; the
+  gate highlights, intent stays human).
+
+Values compare semantically: strings by value (plain template literals
+included), numbers by numeric value — digit separators (`86_400`) do not
+split a fact (`magic-constants` compares raw lexemes; this gate does
+not). Interpolated templates and computed initializers never register or
+count. Never counted: strings shorter than `--min-length` (4), numbers
+with magnitude at or below `--min-value` (100 — 0, 1, 10, 100 happen
+everywhere), protocol positions — object/dict keys, computed member
+indexes (`obj['name']`), switch case labels (the shared rule with
+`magic-constants`) — and import/export source specifiers (the JS analog
+of upstream's exempt import/export/part URIs). The floors and the ignore
+list bind the constant corpus too: small ints (exit codes 0/1/2) and
+ignored values are coincidence by doctrine and neither collide in the
+regression rule nor seed the registry — an ignored value cannot be the
+canonical twin that flags someone else. `--ignore VALUE` exempts a
+value permanently: strings by value, numbers by their decimal form;
+entries containing `/` are file-path globs exempting whole files instead
+(a plain word silences the word, not a folder). `--exclude GLOB` drops
+files from the count; the default `src/` selection already excludes test
+files (the JS-side default for upstream's generated + `test/**` globs).
+
+**Pure alias** — a private `const` whose initializer is another
+constant's identifier (`const _appName = NAME;`) is flagged on sight:
+`alias \`_appName\` adds no information — reference \`NAME\` directly`.
+A private alias adds a name without information and hides that the
+vocabulary is shared. Public declarations are exempt (re-export shims
+are a deliberate API shape), computed initializers are not aliases, and
+`--no-aliases` switches the rule off (upstream's `aliases` config key,
+default true; any other gate's parser rejects the flag as unknown).
+
+Exit 2 iff violations exist; unknown flags and invalid numbers are usage
+errors (exit 1).
+
+Dogfood: the repo runs this gate on its own `src/` — the dogfood that
+motivated upstream's corpus fixes. The upgraded gate went from 124
+warnings on the pre-port tree to 1: shared vocabulary (AST node names,
+source extensions, CLI/config spellings like `test`, `--test`,
+`exclude`, `coverage`, `string`, the 1000 unit scale) got one home each
+(`src/constants.js`, `complexity.js`, `files.js`) and is referenced at
+every use site. The remaining warning is documented residue:
+mutation's `DEFAULT_MAX_MUTANTS = 500` coincides with memory's
+`DEFAULT_BADGE_THRESHOLD = 500` while naming two different facts —
+upstream exempts such coincidences via its `ignore` config; crap4js has
+no config file, so the code comment at the site documents it.
+
 ## `duplicates`
 
 `crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
@@ -560,13 +766,22 @@ flow-annotated `.js` files. Exit 2 iff violations exist.
 ## `folder-structure`
 
 `crap4js folder-structure` (port of crap4dart's folder_structure gate,
-0.9.x) flags directories containing more than `max_loose_files` (default
-0) source files DIRECTLY — a flat-file sprawl that should be organized
-into feature packages. Only direct children of `src/` (the port's source
-root) count; files in subdirectories are the organized form. Violation:
-`N loose files directly in src — group them into feature packages
-(max 0)`. Takes no arguments (any argument is a usage error); the
-directory and threshold are baked in. Exit 2 iff violations exist.
+commit 753c3580) flags directories holding more than their cap of
+logical source units DIRECTLY — a flat-file sprawl that should be
+organized into feature packages. Only a directory's own files count;
+files in subdirectories are the organized form. Violation: `N loose
+files directly in DIR — group them into feature packages (max CAP)`.
+
+Two forms: the classic `--dir GLOB` (repeatable; literal path or glob
+like `src/*`) + shared `--max-loose-files N` (defaults: `src`, `0`),
+and repeatable `--cap PATTERN:N` per-pattern caps (upstream's `config`
+map, e.g. `--cap 'src:3' --cap 'src/**:30'`) which take precedence when
+present — a directory matched by several caps uses the first one's.
+Generated siblings of one source file collapse into one logical unit
+(`magic.js` + `magic.d.ts` + `magic.min.js` share the stem `magic`);
+`--exclude GLOB` drops files from the count; glob expansion skips
+hidden and build directories (`node_modules`, `build`, `dist`,
+`coverage`). Exit 2 iff violations exist.
 
 ## `mutation`
 
@@ -713,6 +928,360 @@ The repo's own md corpus measures clean at the dogfood thresholds
 (when to profile, how the instrumentation works, how to read the report)
 plus one line on installing it as an agent skill. Exits 0.
 
+## `reorder`
+
+`crap4js reorder [--dry-run] [paths...]` (port of crap4dart 0.22.0's
+reorder command, upstream spec §11.24, commit 24a6f24f) rewrites class
+members into the canonical order. It is NOT a gate — a deterministic
+source transform with a formatter's contract: the same input always
+produces the same output, already-canonical files stay byte-identical,
+and reordering an already-reordered file changes nothing (idempotent).
+
+```
+crap4js reorder [--dry-run] [paths...]
+```
+
+Canonical order (the documented JS adaptation of the upstream Dart
+table — JS has no const-field kind, so static constants live with
+static fields):
+
+| # | category | members |
+|---|---|---|
+| 1 | static fields | `static x`, `static #x`, `static {}` blocks (constants too) |
+| 2 | instance fields | `x`, `#x`, `accessor x` |
+| 3 | constructor | `constructor()` |
+| 4 | static methods | public `static m() {}` |
+| 5 | getters/setters | `get`/`set` at any staticness, incl. `static get` and `#get` |
+| 6 | public methods | `m() {}` |
+| 7 | private methods | `#m() {}` at any staticness |
+
+Kind wins over staticness: a `static get g()` is an accessor (5), a
+`static #sp()` is a private method (7). This is a documented JS-only
+deviation: upstream FINAL's `_methodCategory` checks `isStatic` first
+(a Dart `static getter` lands in the static-methods bucket), and
+crap4py mirrors that staticness-first ladder; crap4js keeps every
+accessor — however qualified — in one run. Members of the same
+category keep their original relative order — a stable partition,
+never an alphabetical sort.
+
+Doc comments (`/** ... */` directly above a member) and whole-line
+`//` comment blocks move with their member — including a block
+separated from the member by a single blank line; two or more blank
+lines detach it. A detached block stays in the file and travels with
+the member it precedes; comments are never dropped. A comment that
+looks like code (`// fake() {}`) is carried, not parsed. Members on
+the class header line keep the header (`class A { // note` survives),
+and comments between the last member and the closing brace stay put.
+Only top-level class declarations are reordered — `export class` and
+`export default class` included; class expressions and nested classes
+are left untouched, as are TS enums and object literals (member order
+is semantics there).
+
+Line-ending style (LF or CRLF) is preserved, and so is a missing
+trailing newline. With `--dry-run` nothing is written: the command
+lists the files that would change and exits 2 (exit 0 when everything
+is already canonical). Default: writes the files and exits 0. Default
+selection is the `src/` walk; explicit paths may be files or
+directories (any source extension). Files that fail to parse are
+skipped with a note — never fatal.
+
+## string-hazards
+
+`crap4js string-hazards [--severity warning|error] [paths...]` (port of
+crap4dart's string_hazards gate, upstream spec §11.25, commit 62fec6833e)
+flags string literals whose escaping or pattern usage contradicts what
+the author almost certainly meant, from the parsed AST only. Three
+near-zero-false-positive checks:
+
+1. **Escaped interpolation** — `\${name}` / `\$name` inside a template
+   literal renders the literal text `$name`. Flagged only when the same
+   root identifier is genuinely interpolated (`${name}`) elsewhere in the
+   same file (sibling evidence), which keeps deliberate shell escapes
+   quiet. JS adaptation: plain `'...'` strings never interpolate, so they
+   are not scanned (upstream scans Dart's non-raw strings, which do), and
+   tagged templates (`String.raw` and friends) are out of scope, like
+   upstream's raw strings. Interpolated expressions contribute their ROOT
+   identifier: `user.name` and `builder.build()` evidence `user`;
+   index expressions (`list[0]`) and bare calls (`g()`) evidence nothing.
+2. **RegExp source with an escaped anchor** — a regex literal `/...\$/`
+   or the first string argument of `RegExp(...)` / `new RegExp(...)`
+   ending with `\$` (or starting with `\^`) matches a literal
+   dollar/caret where the end/start anchor was almost certainly intended
+   (a plain `$`/`^` is the anchor). The check reads the regex SOURCE: for
+   string arguments that is the decoded value (`'...\\$'` survives as
+   `\$`), for regex literals the pattern text as written.
+3. **Anchors in literal String patterns** — `String.prototype.replace` /
+   `replaceAll` / `split` treat a string search value as literal text, so
+   a leading `^` or a trailing `$` written unescaped can only ever match
+   that literal character — a RegExp was probably intended. Upstream's
+   raw trailing-`$` rule maps to the source form: `'abc\$'` (escaped in
+   source — dollar awareness) is spared, `'abc$'` is flagged. Only the
+   first argument (the pattern) is checked; non-literal arguments
+   (variables, regex values, `'a' + 'b$'` concatenations) and bare
+   `split(...)` calls without a receiver are skipped. Dart's
+   adjacent-strings part scan has no JS analog (no literal
+   juxtaposition), matching the magic-constants precedent.
+
+Deliberate literal dollars/carets (shell text, price patterns) trip the
+warnings occasionally — that is what the severity discipline is for:
+default **warning** — findings are printed but exit 0 (upstream's
+warning severity has no crap4js counterpart, so the port establishes the
+convention here, matching the go/py ports); `--severity error` makes
+findings exit 2. Either way the findings honor ignore markers
+(`// ignore:string-hazards`, or the legacy blanket markers) before
+printing and exit-code aggregation. Default selection: the `src/` walk;
+explicit paths may be files or directories (test files always excluded).
+Exit `1` on usage errors (unknown `--flag=...`, unknown severity value).
+
+## identical-branches
+
+`crap4js identical-branches [--severity warning|error] [paths...]`
+(port of crap4dart's identical_branches gate, upstream spec §11.26,
+commit c6b2425add) flags the copy-paste-edit bug family — syntactically
+identical pieces inside one construct where a second, slightly different
+piece was intended. All comparisons use a canonical form:
+whitespace-, comment- and parenthesis-independent, operands of
+commutative operators sorted (`a == b` matches `b == a`), same-operator
+nests of the associative operators flattened (`a && b && c` compares
+equal regardless of grouping). Non-commutative operators keep their
+shape: `a < b` and `b < a` stay distinct. Six finding kinds:
+
+1. **Duplicate conditions** in one `if`/`else if` chain — every later
+   branch is unreachable.
+2. **Duplicate branch bodies** in one chain (an `else` equal to its
+   `then`; a single-statement block equals the naked statement; the
+   violation points at the unwrapped statement's line).
+3. **Duplicate operands** in one `&&`/`||` chain (`a || a` collapses to
+   `a`) and **absorbed operands** (`a || b && a` collapses to `a`); only
+   the outermost link of a same-operator chain reports.
+4. **Identical ternary branches** (`c ? x : x` — the condition is dead).
+5. **Duplicate positional arguments** in one call (`f(w, h, w)`) —
+   all-literal lists exempt (uniform-value APIs), literals never
+   reported as the repeat, spread elements exempt; JS has no named
+   arguments, so upstream's named-argument exemption has no analog.
+6. **Duplicate handler bodies** in one `try` — JS's `try` has exactly
+   one catch clause, so this maps to catch body vs finally body:
+   identical failure and unconditional paths double-execute the same
+   code.
+
+Only pieces of the *same* construct are compared; identical conditions
+in separate `if` statements are legal. `switch` is excluded (duplicate
+cases are a syntax error in JS). Severity: default **warning** —
+findings are printed but exit 0; `--severity error` exits 2 (same
+rationale as string-hazards: equivalence assumes side-effect-free
+operands). Findings honor ignore markers (`// ignore:identical-branches`,
+or the legacy blanket markers). Exit `1` on usage errors. Deliberate
+same-expression sites (one-line ranges, idempotence asserts) carry a
+reason-carrying ignore marker — dogfood on crap4js's own `src/` found
+exactly one such site and no real slips.
+
+## collapsible-flow
+
+`crap4js collapsible-flow [--severity warning|error] [paths...]`
+(port of crap4dart's collapsible_flow gate, upstream spec §11.28,
+commit 7bdfd64ae1) flags control-flow nesting that a
+semantics-preserving mechanical rewrite can flatten. Every finding is
+correct code — the gate trades flatness, not bugs. Three checks, with
+the JS host mapping:
+
+1. **Collapsible if** — `if (a) { if (b) X }` with no `else` on either
+   level and nothing but the inner `if` in the then-branch (unbraced
+   counts) merges into `if (a && b) X`. Short-circuit `&&` preserves
+   evaluation order, so the merge is always equivalent (including
+   `await`ed or side-effecting conditions). JS has no pattern
+   conditions (`if (x case P)` is Dart-only), so upstream's
+   pattern-clause exclusion has no analog here.
+2. **Redundant else** — `if (c) { return X; } else { Y }` where the
+   then-branch always exits: `return`/`break`/`continue`/`throw` (JS's
+   `throw` is a statement — Dart's `throw`/`rethrow` expressions map to
+   `ThrowStatement`, and there is no rethrow), a block ending in one of
+   those, an if/else pair whose both branches exit, or a `try` whose
+   body exits and whose finally is absent, empty, or exits. The `else`
+   is redundant — dedent its body. An inner if WITHOUT an else never
+   counts as exiting: control falls through when its condition is
+   false, so dedenting would change behavior (the upstream's own
+   hard-learned trap, encoded in the if-exit rule). `switch` bodies are
+   not analyzed (case fall-through), so a trailing `switch` never
+   counts; catch handlers are not analyzed either — body and finalizer
+   decide, like upstream.
+3. **Chain after terminal then** — an `else if` following an
+   always-exiting then-branch. The whole chain wants a guard sequence
+   or a dispatch table; that rewrite is not mechanical, so this check
+   only points at it (no fix-shaped message). JS spells `else if` as
+   the if's `alternate` being another IfStatement.
+
+Severity: default **warning** — findings are printed but exit 0;
+`--severity error` exits 2 (same rationale as string-hazards: every
+finding is correct code). Findings honor ignore markers
+(`// ignore:collapsible-flow`, or the legacy blanket markers). Exit `1`
+on usage errors. Dogfood: the first self-scan of crap4js's own `src/`
+found three sites (one collapsible if in `duplicates.js`, two
+redundant else bodies in the `profile.js`/`reorder.js` flag parsers —
+fixed by dedenting the fallback behind the exiting throw, guarded by
+the same branch); the gate now runs clean (37 files, 509 if
+statements).
+
+## non-null-assertion
+
+`crap4js non-null-assertion [--severity warning|error] [paths...]`
+(port of crap4dart's non_null_assertion gate, upstream spec §11.29,
+commit e3ad58594c) flags every TS non-null assertion — the postfix `!`
+operator. A bang crashes on null where the null-safe alternatives
+carry the same intent with a readable check: `?.`/`??` — the common
+check-then-bang ternary `E != null ? E!.m() : f` collapses to
+`E?.m() ?? f` (single receiver evaluation, no bang). Zero thresholds:
+any `!` is a finding, and the violation carries the line of the `!`
+token.
+
+JS host mapping:
+
+- Dart's postfix `!` (`x!`, `map['k']!`, chains `a!.b!`) is the
+  TypeScript `TSNonNullExpression` node — only `.ts`/`.tsx` files can
+  carry it: @babel/parser routes the typescript plugin by extension and
+  the flow plugin has no such node, so a `.js` file can never flag here
+  (its `!` is the logical-not prefix).
+- Not flagged, by construction: `!=`/`!==` (BinaryExpression), the
+  logical-not prefix `!x` (UnaryExpression), `++`/`--`
+  (UpdateExpression), null-aware access `?.`
+  (OptionalMemberExpression/OptionalCallExpression), and `??`
+  (LogicalExpression) — none of these is a TSNonNullExpression.
+- Dart's null-assert pattern (`case var x!`) has no TS analog —
+  omitted; so is upstream's pattern-side fix, the null-check pattern
+  (`case var x?`).
+- Type casts are not bangs: `x as T` parses as TSAsExpression, and the
+  angle-bracket cast `<T>x` does not parse at all under the port's
+  jsx+typescript routing (ambiguous with JSX), so neither reaches this
+  gate. A bang inside a string or template literal is just literal
+  text.
+
+Severity: default **warning** — findings are printed but exit 0;
+`--severity error` exits 2. The warning default is deliberate: on an
+existing codebase every removed `!` needs a per-site nullability
+audit. Upstream adopts via the baseline ratchet (`check
+--save-baseline`); crap4js has no baseline machinery, so the ratchet
+is a manual discipline: record the count this gate reports, drive it
+to zero, then run with `--severity error` (CI or pre-commit) to keep
+it there. Findings honor ignore markers
+(`// ignore:non-null-assertion`, or the legacy blanket markers). Exit
+`1` on usage errors. Dogfood: the first self-scan of crap4js's own
+source found zero bangs (40 files scanned; the repo has no `.ts`/
+`.tsx` files, so the TS-only gate has no surface in this codebase yet).
+
+## `loc`
+
+`crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]` (port of
+crap4dart's loc gate, config flattened to flags) fails files longer than N
+lines (default 800). The line count matches upstream: an empty file is 0
+lines and a trailing newline does not open a new one. `--exclude` globs
+(project-relative POSIX paths, repeatable, `*` within / `**` across
+segments) drop files from the check entirely — they are not counted in the
+summary either. One `file: N lines > max M` line per violation plus a
+summary; exit 2 iff violations exist. Findings honor ignore markers
+(`// ignore:loc`).
+
+## `method-size`
+
+`crap4js method-size [--max-lines N] [--max-params N] [paths...]` (port of
+crap4dart's method_size gate) fails methods longer than N body lines
+(default 60, counted as `endLine − startLine + 1`) or with more than N
+parameters (default 6). Constructors are checked for the parameter count
+only (upstream rule) — a long constructor is not flagged. The checked
+surface is the method-extraction walk the CRAP command uses, plus
+constructors: top-level functions, class methods (class-qualified names),
+object methods, and assigned/declarator function literals. Violations
+carry the method's start line; exit 2 iff violations exist. Findings honor
+ignore markers (`// ignore:method-size`).
+
+## `public-docs`
+
+`crap4js public-docs [--exclude GLOB]... [paths...]` (port of
+crap4dart's public_docs gate with the JS host conventions) fails exported
+declarations lacking an adjacent `/** ... */` JSDoc block. The public API
+surface is the exported one (the same notion `unused-code` uses):
+exported function declarations and function-valued `export const`
+declarators, exported classes, and the public methods of exported classes
+(static included, getters/setters included). Exempt: constructors (not
+part of the documented API surface upstream), private `#` methods, methods
+with computed/string keys, and anonymous default exports. A JSDoc counts
+only when the block comment ends on the line directly above the
+declaration — a `//` comment or blank line in between breaks the
+adjacency, and a plain `/* ... */` block is not a doc comment. Violation:
+`missing JSDoc on <kind> "<name>"` at the declaration line; summary counts
+public declarations checked. Exit 2 iff violations exist. Findings honor
+ignore markers (`// ignore:public-docs`).
+
+## `test-coverage`
+
+`crap4js test-coverage [--min-percent F] [--coverage PATH]
+[--exclude GLOB]... [paths...]` (port of crap4dart's coverage gate) fails
+when the total statement coverage of the selected files is below F%
+(default 80.0). The coverage input is the CRAP command's (`--coverage`,
+default `coverage/coverage-final.json`; a `.info` path parses as an lcov
+tracefile) with the same fail-closed semantics: a missing, unparseable, or
+record-free input is an input error and exits 1 — never a silent pass.
+The ratio is the statement-hit ratio the CRAP attribution uses: covered /
+total statements over the selected files that have a coverage entry
+(`--exclude` drops files before the ratio; files without an entry are
+skipped, not counted as 0%). Pass line: `coverage P% >= min M%`; violation
+line: `total coverage P% < min M%` under the coverage path. Exit 2 iff the
+ratio is below the minimum.
+
+## `complexity`
+
+`crap4js complexity [--metric cyclomatic|cognitive] [--max N] [paths...]`
+(port of crap4dart's complexity gate with the cognitive-metric option, the
+same shape the Go/Python ports carry) fails functions whose complexity
+exceeds N (default 10): the cyclomatic path count (CC, the metric the CRAP
+formula uses) by default, or the cognitive score with
+`--metric cognitive` (see the cognitive-complexity section). Violation:
+`file:line: <name> CC=<v> > max <N>` (or `cognitive=<v>` under the
+cognitive metric), one line per function plus a
+`N/M functions over their <metric> limit <N>` summary; exit 2 iff
+violations exist. Findings honor ignore markers
+(`// ignore:complexity`).
+
+## Ignore comments
+
+The gate subcommands honor ignore comments (port of crap4dart 8abb64c's
+`ignore_filter.dart`); suppressed violations are dropped before the
+output and the exit code. Suppression is per-gate opt-in: upstream
+configures it with `ignorable: true` per gate in YAML; crap4js has no
+config file, so the ignorable set is hard-coded — the
+violation-reporting gate subcommands, except `folder-structure` (its
+violations name directories, which no comment can address),
+`mutation` (its summary carries the pre-aggregated score, which would
+desync from the filtered violation list), and `test-coverage` (its
+single violation is an aggregate naming the coverage input itself — a
+marker inside that input would suppress the gate into a false pass).
+Markers never affect `profile`, `memory`, `similarity`, `skill`, or the
+default analyze run.
+
+Legacy blanket markers (upstream 0.5.0 semantics, unchanged):
+
+- `// crap:ignore` — suppresses every ignorable gate's violation on that
+  line or the line above.
+- `// crap:ignore-file` — same, file-wide; anywhere in the first 5 lines.
+
+Granular markers, Dart-lint style — one gate id per marker:
+
+- `// ignore:<gate-id>` — suppresses only that gate on that line (trailing)
+  or the line above. A run of stacked whole-line markers directly above the
+  code line all apply (the walk stops at the first non-marker line).
+- `// ignore-file:<gate-id>` — suppresses only that gate file-wide;
+  within the first 5 lines.
+
+`<gate-id>` is the subcommand name (`nesting`, `magic-constants`, ...) and
+ends at the next whitespace or `//`. Several markers on one line union;
+an empty id (`// ignore:`) suppresses every ignorable gate; unknown ids
+and comma lists (`// ignore:a,b` is the single id `a,b`) match nothing.
+
+```js
+const DEFAULT_MAX_MUTANTS = 500; // ignore:scattered-constants
+// ignore:magic-constants
+// ignore:unused-code
+const ACCENT = guessColor(); // both markers above apply to this line
+```
+
 ## Complexity rules
 
 Base value `1`, then `+1` for each occurrence of:
@@ -802,12 +1371,15 @@ crap4js/
     unusedFiles.js unused-files command
     bannedImports.js  banned-imports command
     magicConstants.js  magic-constants command
+    scatteredConstants.js  scattered-constants command
     testAssertions.js  test-assertions command
     inlineAnonTypes.js  inline-anon-types command
     folderStructure.js  folder-structure command
     mutation.js   mutation command (operator table, engine, coverage gating)
     mutationCache.js  digest-incremental mutation cache (killed-stays-killed)
     gateCommon.js  shared gate-subcommand runner
+    stringHazards.js  string-hazards command
+    identicalBranches.js  identical-branches command
     imports.js     import-specifier collection + resolution
     skill.js       skill command text
   test/
@@ -828,6 +1400,7 @@ crap4js/
     magicConstants.test.js
     testAssertions.test.js
     folderStructure.test.js
+    stringHazards.test.js
     profile.test.js
     skill.test.js
     cli.test.js

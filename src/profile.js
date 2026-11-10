@@ -24,7 +24,8 @@ import {
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { analyze } from './analyzer.js';
-import { findSourceFiles } from './files.js';
+import { MILLIS_PER_SECOND, TEST, TEST_FLAG, THRESHOLD_FLAG } from './constants.js';
+import { UTF8, findSourceFiles } from './files.js';
 import { instrumentSource } from './instrument.js';
 import { padLeft, padRight } from './report.js';
 
@@ -122,10 +123,14 @@ export function parseProfileArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--name') raw.name = requireValue(argv, ++i, a);
-    else if (a === '--threshold') raw.threshold = requireValue(argv, ++i, a);
+    else if (a === THRESHOLD_FLAG) raw.threshold = requireValue(argv, ++i, a);
     else if (a === '--top') raw.top = requireValue(argv, ++i, a);
-    else if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
-    else raw.paths.push(a);
+    else {
+      // The throw exits, so its else was redundant — the fallback dedents
+      // behind it, still guarded by this branch (collapsible-flow fix).
+      if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
+      raw.paths.push(a);
+    }
   }
   return { ...raw, thresholdMs: parseMs(raw.threshold), topN: parseTop(raw.top) };
 }
@@ -172,8 +177,8 @@ function runInstrumentedTests(files, opts, ctx) {
 // ORIGINAL, non-instrumented test files and record no timings (0.9.2).
 function testArgs(opts, root, tempDir) {
   const args = opts.name
-    ? ['--test', '--test-name-pattern', opts.name]
-    : ['--test'];
+    ? [TEST_FLAG, '--test-name-pattern', opts.name]
+    : [TEST_FLAG];
   return [...args, ...opts.paths.map((p) => remapPath(p, root, tempDir))];
 }
 
@@ -206,7 +211,7 @@ function prepareTempCopy(files, tempDir, root) {
   rmSync(tempDir, { recursive: true, force: true });
   mkdirSync(tempDir, { recursive: true });
   copyIfExists(path.join(root, 'package.json'), path.join(tempDir, 'package.json'));
-  copyIfExists(path.join(root, 'test'), path.join(tempDir, 'test'));
+  copyIfExists(path.join(root, TEST), path.join(tempDir, TEST));
   copyIfExists(path.join(root, 'src'), path.join(tempDir, 'src'));
   for (const file of files) {
     writeInstrumented(file, root, tempDir);
@@ -228,7 +233,7 @@ function writeInstrumented(file, root, tempDir) {
 // Files that fail to parse are copied verbatim (silently) — same policy as
 // upstream crap4dart's instrumenter.
 function instrumentedContent(file, root, rel) {
-  const source = readFileSync(file, 'utf8');
+  const source = readFileSync(file, UTF8);
   try {
     return instrumentSource(source, {
       ext: path.extname(file),
@@ -288,7 +293,7 @@ function isPidOutput(name, base) {
 function mergeTimingFile(merged, file) {
   let data;
   try {
-    data = JSON.parse(readFileSync(file, 'utf8'));
+    data = JSON.parse(readFileSync(file, UTF8));
   } catch {
     return;
   }
@@ -347,7 +352,7 @@ export function formatProfileReport(profiles, { top = DEFAULT_TOP, thresholdMs }
   const total = totalMicros(sorted);
   const shown = top > 0 ? sorted.slice(0, top) : sorted;
   const header = tableHeader();
-  let out = `Profile Report (${profiles.length} methods, total ${fmtTotal(total / MICROS_PER_MILLIS)})\n`;
+  let out = `Profile Report (${profiles.length} methods, total ${fmtTotal(total / MILLIS_PER_SECOND)})\n`;
   out += `${header}\n${'-'.repeat(header.length)}\n`;
   for (const p of shown) {
     out += profileRow(p, total) + '\n';
@@ -387,9 +392,9 @@ function profileRow(p, total) {
   const mean = p.calls > 0 ? p.totalMicros / p.calls : 0;
   const pct = total > 0 ? (p.totalMicros / total) * 100 : 0;
   return (
-    padLeft(fmtTotal(p.totalMicros / MICROS_PER_MILLIS), 10) +
+    padLeft(fmtTotal(p.totalMicros / MILLIS_PER_SECOND), 10) +
     ' ' +
-    padLeft(fmtTotal(p.totalSelfMicros / MICROS_PER_MILLIS), 10) +
+    padLeft(fmtTotal(p.totalSelfMicros / MILLIS_PER_SECOND), 10) +
     ' ' +
     padLeft(pct.toFixed(1) + '%', 6) +
     ' ' +
@@ -418,7 +423,7 @@ function thresholdLine(profiles, thresholdMs) {
 }
 
 function countOver(profiles, thresholdMs) {
-  return profiles.filter((p) => p.totalMicros / MICROS_PER_MILLIS > thresholdMs).length;
+  return profiles.filter((p) => p.totalMicros / MILLIS_PER_SECOND > thresholdMs).length;
 }
 
 function profileVerdict(profiles, thresholdMs, ctx) {
@@ -467,20 +472,15 @@ function sortByTotal(profiles) {
   return [...profiles].sort((a, b) => b.totalMicros - a.totalMicros);
 }
 
-// Microseconds per millisecond — profile times are tracked in micros.
-const MICROS_PER_MILLIS = 1000;
-
 function ms(micros) {
-  return (micros / MICROS_PER_MILLIS).toFixed(2);
+  // Profile times are tracked in micros; micros/millis = millis/second.
+  return (micros / MILLIS_PER_SECOND).toFixed(2);
 }
 
 // TOTAL/SELF with adaptive units (0.9.5): at extreme call counts (tens of
 // billions, e.g. a markdown hot loop) a plain toFixed(2) renders
 // `50000000.00` — a wall of digits that blows the column width up. Unit
 // suffixes keep the value compact at any magnitude.
-// Millis per second — fmtTotal's first tier boundary and its s-tier divisor.
-const MILLIS_PER_SECOND = 1000;
-
 function fmtTotal(millis) {
   if (millis < MILLIS_PER_SECOND) return `${millis.toFixed(2)}ms`;
   if (millis < 60000) return `${(millis / MILLIS_PER_SECOND).toFixed(2)}s`;

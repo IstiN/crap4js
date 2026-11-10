@@ -1,5 +1,89 @@
 # Changelog
 
+## [0.32.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.31.0...v0.32.0) (2026-11-09)
+
+
+### Features
+
+* port loc, method-size, public-docs, test-coverage, complexity gates ([#84](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/84)) ([c8407b8](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/c8407b8af2f48aa930105fad8edc7304218d045f))
+
+## [0.31.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.30.0...v0.31.0) (2026-11-06)
+
+
+### Features
+
+* fail closed when unit-test coverage input is missing, unparseable, or record-free ([#82](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/82)) ([dfaaf02](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/dfaaf0245215cb05efe137205d1ccd909e3cb9d4))
+
+## [0.30.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.29.0...v0.30.0) (2026-11-05)
+
+
+### Features
+
+* **cli:** lcov coverage, --diff-base, --strict, --exclude on the CRAP command ([#79](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/79)) ([#80](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/80)) ([d6a86cb](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/d6a86cba9e95c72e5e2d4baacb55f67e57c50721))
+
+## [0.29.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.28.0...v0.29.0) (2026-10-30)
+
+
+### Features
+
+* **gate:** non-null-assertion — ban the TS bang operator (adapted from upstream e3ad58594c) ([#77](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/77)) ([bb56b5a](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/bb56b5a16a3b176e9a56f72bb5e8b8895036507a))
+
+## [0.28.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.27.0...v0.28.0) (2026-10-30)
+
+
+### Features
+
+* **gate:** collapsible-flow — flatten mechanical control-flow nesting (adapted from upstream 7bdfd64ae1) ([#75](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/75)) ([76a8637](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/76a8637b924de61b3b364a5a87f4618732ea5627))
+
+## [0.27.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.26.0...v0.27.0) (2026-10-28)
+
+
+### Features
+
+* **gate:** identical-branches — copy-paste-edit family ([#73](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/73)) ([8dc8840](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/8dc884000aabbbb139660c23caf891289e7a6996))
+
+## [0.26.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.25.0...v0.26.0) (2026-10-28)
+
+
+### Features
+
+* **gate:** string-hazards — escaped interpolations, regex anchors, literal-pattern anchors (adapted from upstream 62fec6833) ([#71](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/71)) ([fb84783](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/fb84783d5c1f439078bf8ea4ca4b687b609f5515))
+
+## [0.25.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.24.0...v0.25.0) (2026-10-27)
+
+
+### Features
+
+* **cli:** reorder command - deterministic canonical member ordering (adapted from upstream 24a6f24f) ([#69](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/69)) ([f27b465](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/f27b4651c7f17b939820216e3d9a08eda07864e8))
+
+## [0.24.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.23.0...v0.24.0) (2026-10-27)
+
+
+### Features
+
+* **gate:** ignore markers — blanket legacy + granular per-gate ([#67](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/67)) ([9e3eeeb](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/9e3eeebbd54c68b6616064545246c353f1bfe28a))
+
+## [0.23.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.22.0...v0.23.0) (2026-10-27)
+
+
+### Features
+
+* **gate:** scattered-constants corpus guards + aliases rule + dogfood dedup (adapted from upstream a314b485) ([#65](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/65)) ([3c34c61](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/3c34c617214287fcfe0ff3c62c2826027c8b82c8))
+
+## [0.22.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.21.0...v0.22.0) (2026-10-26)
+
+
+### Features
+
+* **gate:** folder-structure fan-out cap + glob dirs + stem collapse (adapted from upstream 753c3580) ([#63](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/63)) ([edfae70](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/edfae701549376de87cf452cca11dfe6140cf8d3))
+
+## [0.21.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.20.0...v0.21.0) (2026-10-26)
+
+
+### Features
+
+* **gate:** scattered-constants gate ([#61](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/issues/61)) ([c3d3afa](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/commit/c3d3afab72aaa4b1a57397743d30cef6510a0a6b))
+
 ## [0.20.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.19.0...v0.20.0) (2026-10-23)
 
 

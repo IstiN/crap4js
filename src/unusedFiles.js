@@ -7,13 +7,14 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, testFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, testFiles, toRelPath } from './files.js';
 import { applyGateArg, runCheck, skipPartialSelection } from './gateCommon.js';
 import { globToRegExp } from './bannedImports.js';
 import { parseSource } from './complexity.js';
 import { collectImports, resolveImports } from './imports.js';
+import { EXCLUDE } from './constants.js';
 
-const VALUE_FLAGS = { '--exclude': 'exclude' };
+const VALUE_FLAGS = { '--exclude': EXCLUDE };
 
 /**
  * Parse `unused-files` arguments into `{ exclude, paths }`. `--exclude`
@@ -57,7 +58,7 @@ export function unusedFilesViolations(files, projectRoot, importers = []) {
 }
 
 function importedFrom(file, projectRoot) {
-  const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+  const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
   const out = [];
   for (const spec of collectImports(ast.program)) {
     out.push(...resolveImports(spec, file, projectRoot));
@@ -94,5 +95,6 @@ export function runUnusedFiles(argv, ctx) {
     checkedFiles,
     (fs, root) => unusedFilesViolations(fs, root, importers),
     unusedFilesSummary,
+    'unused-files',
   );
 }

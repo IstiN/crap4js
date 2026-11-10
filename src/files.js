@@ -3,9 +3,20 @@
 import { spawnSync } from 'node:child_process';
 import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { TEST } from './constants.js';
 
-const SOURCE_EXTS = new Set(['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx']);
+// Node-runnable JS extensions (what `node --test` executes — the test
+// file selection), the TypeScript-parsed flavors, and the full source
+// selection (runnable + JSX + TS).
+export const RUNNABLE_EXTENSIONS = ['.js', '.mjs', '.cjs'];
+export const TS_EXTENSIONS = ['.ts', '.tsx'];
+export const SOURCE_EXTENSIONS = [...RUNNABLE_EXTENSIONS, '.jsx', ...TS_EXTENSIONS];
+const SOURCE_EXTS = new Set(SOURCE_EXTENSIONS);
 const CHANGE_STATUS = new Set(['M', 'A', 'R', 'C', '?']);
+
+// The one encoding every source is read with (scattered-constants dogfood:
+// the spelling lived hardcoded in 20+ files).
+export const UTF8 = 'utf8';
 
 // Colocated test files — excluded so they don't pollute the production metric.
 const TEST_FILE_RE = /\.(spec|test)\.(js|jsx|ts|tsx)$/;
@@ -27,7 +38,7 @@ export function changedFiles(projectRoot) {
   const result = spawnSync(
     'git',
     ['-C', projectRoot, 'status', '--porcelain'],
-    { encoding: 'utf8' },
+    { encoding: UTF8 },
   );
   if (result.error) {
     throw new Error(`git status failed to start: ${result.error.message}`);
@@ -176,7 +187,7 @@ export function isAnySourceFile(p, st) {
 export function testFiles(paths, projectRoot) {
   if (paths.length > 0) return expandPaths(paths, projectRoot, isAnySourceFile);
   return [
-    ...walkDir(path.join(projectRoot, 'test'), isAnySourceFile),
+    ...walkDir(path.join(projectRoot, TEST), isAnySourceFile),
     ...walkDir(path.join(projectRoot, 'src'), isAnySourceFile).filter(isTestFile),
   ].sort();
 }

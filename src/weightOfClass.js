@@ -6,8 +6,9 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck } from './gateCommon.js';
+import { ANON, CLASS_METHOD, CLASS_PRIVATE_METHOD, CONSTRUCTOR } from './complexity.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
 
 const MAX_WEIGHT = 0.33;
@@ -16,7 +17,7 @@ const CLASS_TYPES = new Set(['ClassDeclaration', 'ClassExpression']);
 // Babel 8 emits ClassProperty/ClassPrivateProperty for fields; the
 // PropertyDefinition spelling is accepted for forward compatibility.
 const FIELD_TYPES = new Set(['ClassProperty', 'PropertyDefinition']);
-const METHOD_TYPES = new Set(['ClassMethod', 'ClassPrivateMethod']);
+const METHOD_TYPES = new Set([CLASS_METHOD, CLASS_PRIVATE_METHOD]);
 
 /**
  * Public-instance data weight for every class declared in a parsed
@@ -40,7 +41,7 @@ function weightOf(cls) {
   const { fields, methods } = countMembers(cls);
   const members = fields + methods;
   return {
-    name: cls.id?.name ?? '<anonymous>',
+    name: cls.id?.name ?? ANON,
     line: cls.loc.start.line,
     fields,
     members,
@@ -68,7 +69,7 @@ function isPublicField(m) {
 // TS `declare` members excluded, mirroring the Dart gate's
 // non-abstract MethodDeclaration rule).
 function isConcreteMethod(m) {
-  return METHOD_TYPES.has(m.type) && m.kind !== 'constructor' && Boolean(m.body);
+  return METHOD_TYPES.has(m.type) && m.kind !== CONSTRUCTOR && Boolean(m.body);
 }
 
 /**
@@ -82,7 +83,7 @@ export function weightViolations(files, projectRoot) {
   const violations = [];
   let checked = 0;
   for (const file of files) {
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     for (const w of classWeights(ast.program)) {
       checked++;
       if (w.fields > 0 && w.weight > MAX_WEIGHT) {
@@ -117,5 +118,5 @@ export function weightSummary({ violations, checked }) {
  * exist.
  */
 export function runWeightOfClass(paths, ctx) {
-  return runCheck(ctx, gateFiles(paths, ctx.cwd), weightViolations, weightSummary);
+  return runCheck(ctx, gateFiles(paths, ctx.cwd), weightViolations, weightSummary, 'weight-of-class');
 }

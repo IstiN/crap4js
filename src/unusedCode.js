@@ -9,8 +9,9 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck, skipPartialSelection } from './gateCommon.js';
+import { EXPORT_NAMED_DECLARATION, IDENT } from './complexity.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
 
 /**
@@ -24,7 +25,7 @@ export function unusedCodeViolations(files, projectRoot) {
   const violations = [];
   let checked = 0;
   for (const file of files) {
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     const { declarations, counts } = scanModule(ast.program);
     for (const d of declarations) {
       checked++;
@@ -61,7 +62,7 @@ const MODULE_DECLARATIONS = {
 
 // Declarations at module scope that are NOT exported (module-private).
 function moduleDeclarationsOf(stmt) {
-  if (stmt.type === 'ExportNamedDeclaration' || stmt.type === 'ExportDefaultDeclaration') {
+  if (stmt.type === EXPORT_NAMED_DECLARATION || stmt.type === 'ExportDefaultDeclaration') {
     return [];
   }
   return MODULE_DECLARATIONS[stmt.type]?.(stmt) ?? [];
@@ -73,13 +74,13 @@ function namedDeclaration(stmt) {
 
 function variableDeclarations(stmt) {
   return stmt.declarations
-    .filter((d) => d.id.type === 'Identifier')
+    .filter((d) => d.id.type === IDENT)
     .map((d) => ({ name: d.id.name, line: d.loc.start.line }));
 }
 
 function countIdentifiers(n, counts) {
   if (!isNode(n)) return;
-  if (n.type === 'Identifier' || n.type === 'JSXIdentifier') {
+  if (n.type === IDENT || n.type === 'JSXIdentifier') {
     counts.set(n.name, (counts.get(n.name) ?? 0) + 1);
   }
   for (const c of childrenOf(n)) countIdentifiers(c, counts);
@@ -102,5 +103,5 @@ export function unusedCodeSummary({ violations, checked }) {
  */
 export function runUnusedCode(paths, ctx) {
   if (paths.length > 0) return skipPartialSelection(ctx);
-  return runCheck(ctx, gateFiles([], ctx.cwd), unusedCodeViolations, unusedCodeSummary);
+  return runCheck(ctx, gateFiles([], ctx.cwd), unusedCodeViolations, unusedCodeSummary, 'unused-code');
 }

@@ -55,6 +55,13 @@ crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
 crap4js magic-constants [paths...]
                          Flag hex colors outside constants and literals
                          repeated 3+ times in one file.
+crap4js scattered-constants [--min-files N] [--min-length N] [--min-value N]
+                         [--ignore VALUE]... [--exclude GLOB]...
+                         [--aliases|--no-aliases] [paths...]
+                         Flag literals whose value repeats across distinct
+                         files; existing const declarations regress
+                         immediately, private `const _x = kY;` pure aliases
+                         always.
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    [--report percentage|clones] [--ignore-locals]
                    [--ignore-literals] [--ignore-identifiers]
@@ -76,13 +83,17 @@ crap4js mutation [--min-score N] [--max-survivors N]
                  Mutate one operator/literal at a time and re-run the
                  test suite per mutant; covered sites only, survivors
                  flagged.
+crap4js reorder [--dry-run] [paths...]
+                 Rewrite class members into the canonical order
+                 (deterministic source transform, not a gate).
 crap4js skill            Print the crap4js profiling skill for AI agents.
 ```
 
 The first argument selects a subcommand when it is exactly `profile`,
 `file-naming`, `nesting`, `class-size`, `weight-of-class`, `unused-code`,
-`unused-files`, `banned-imports`, `magic-constants`, `duplicates`, `test-assertions`,
-`inline-anon-types`, `folder-structure`, `mutation`, or `skill`; anything else (flags, paths)
+`unused-files`, `banned-imports`, `magic-constants`, `scattered-constants`,
+`duplicates`, `test-assertions`,
+`inline-anon-types`, `folder-structure`, `mutation`, `reorder`, or `skill`; anything else (flags, paths)
 is analyzed as the CRAP command above. `--changed` is mutually exclusive
 with explicit paths. Unknown flags are a usage error (exit 1).
 
@@ -249,7 +260,7 @@ threshold; otherwise `passed`.
 |------|-----------------------------------------------------------------------------|
 | `0`  | Success (including empty selection, or max numeric CRAP ≤ threshold).       |
 | `1`  | CLI usage error (bad flag, bad threshold, `--changed` + paths, unreadable, banned-imports rule misuse). |
-| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, duplicates, test-assertions, inline-anon-types, folder-structure). |
+| `2`  | CRAP threshold exceeded (`CRAP threshold exceeded: <max> > <threshold>` on stderr), profile threshold exceeded, or gate-subcommand violations (file-naming, nesting, class-size, weight-of-class, unused-code, unused-files, banned-imports, magic-constants, scattered-constants, duplicates, test-assertions, inline-anon-types, folder-structure). |
 
 ## `--run-tests`
 
@@ -465,20 +476,92 @@ magic_constants gate; `test-assertions`, `folder-structure`, and
 folder_structure, and duplication gates; `inline-anon-types` is a port
 of the crap4dart 4d844a4 record gates (`inline_record_types` +
 `record_size`, merged and adapted); `mutation` is a port of the
-crap4dart mutation gate (commit c865ec3).
+crap4dart mutation gate (commit c865ec3); `scattered-constants` is a
+port of the crap4dart scattered_constants gate (commit e766d68, v2);
+`string-hazards` is a port of the crap4dart string_hazards gate (upstream
+spec §11.25, commit 62fec6833e); `identical-branches` is a port of the
+crap4dart identical_branches gate (upstream spec §11.26, commit
+c6b2425add); `collapsible-flow` is a port of the crap4dart
+collapsible_flow gate (upstream spec §11.28, commit 7bdfd64ae1);
+`non-null-assertion` is a port of the crap4dart non_null_assertion
+gate (upstream spec §11.29, commit e3ad58594c).
 crap4js has no gate framework and no config file, so each gate is
 a CLI subcommand with its built-in default thresholds; every gate accepts
 `[paths...]` (default: the normal source-selection rules, test files and
 test directories always excluded — except `test-assertions`, which checks
-test files, and `folder-structure`, which takes no arguments). Shared
+test files, and `folder-structure`, which selects directories by flag and
+takes no paths). Shared
 output contract: one `file[:line]: message` line per violation, then a
 one-line summary; exit codes `0` pass, `1` usage error, `2` violations.
 
 Upstream 0.5.0 gate-framework features that have no crap4js equivalent
-and are intentionally NOT ported: `severity`/`ignorable`
-(`crap:ignore` suppression comments), per-gate `entries` threshold
+and are intentionally NOT ported: `severity` (warning downgrade),
+per-gate `entries` threshold
 overrides, and the violation `baseline` (`--save-baseline`/`--baseline`)
-mechanism. crap4js has no YAML config, so gate options are CLI flags.
+mechanism. One exception arrives with the 0.23.0 `string_hazards` port:
+its warning default becomes the first warning-default gate here —
+findings print but exit 0, `--severity error` exits 2 (see
+[string-hazards](#string-hazards)); `identical-branches` inherits the
+same severity discipline (same rationale: equivalence only holds for
+side-effect-free operands), and `collapsible-flow` adopts it because
+every one of its findings is correct code — the gate trades flatness,
+not bugs. `non-null-assertion` adopts it too, for the upstream
+rationale: on an existing codebase every removed `!` needs a per-site
+nullability audit (upstream adopts via the `--save-baseline` ratchet,
+which crap4js does not port — the ratchet is a manual discipline, see
+[non-null-assertion](#non-null-assertion)). crap4js has no YAML config,
+so gate
+options are CLI flags.
+The ignore-comment suppression system IS ported (crap4dart 8abb64c,
+`ignore_filter.dart`) with its per-gate `ignorable` opt-in hard-coded —
+crap4js has no config file, so the ignorable set is a registry
+(`IGNORABLE_GATES` in `src/ignoreFilter.js`), not a config flag.
+
+### Ignore comments (crap4dart 8abb64c)
+
+The gate subcommands drop violations suppressed by ignore comments
+before output and exit-code aggregation, applied at the shared
+violation path (`runCheck`, plus `file-naming`'s inline body).
+Suppression applies only to gates in the ignorable registry — upstream's
+`ignorable: true` config opt-in; a non-ignorable gate is never
+suppressed, and unreadable files are never ignored.
+
+Markers (`//` comments only — the JS host adaptation; block comments
+are out of scope):
+
+- `// crap:ignore` — legacy blanket: suppresses every ignorable gate on
+  the violation line or the line above.
+- `// crap:ignore-file` — legacy blanket, file scope: anywhere in the
+  first 5 lines suppresses every ignorable gate's violations in the file.
+- `// ignore:<gate-id>` — granular, line scope, one gate id per marker:
+  suppresses only that gate on the violation line (trailing marker) or
+  the line above. A run of stacked whole-line markers directly above the
+  code line all apply; the walk stops at the first non-marker line.
+- `// ignore-file:<gate-id>` — granular, file scope: within the first
+  5 lines it suppresses only that gate file-wide.
+
+Grammar: one id per marker, ending at the next whitespace or `/`
+(regex `\/\/\s*ignore:([^\s/]*)`, `\/\/\s*ignore-file:([^\s/]*)`).
+Several markers on one line union their ids; an empty id (`// ignore:`)
+suppresses every ignorable gate, matching the legacy scope. An id never
+matches a rule it does not name — unknown ids and comma-lists
+(`// ignore:a,b` carries the single id `a,b`) are silently inert. Gate
+ids are the crap4js subcommand names.
+
+Ignorable mapping (upstream family → crap4js gate):
+
+| crap4js gates | markers honored | upstream families |
+|---|---|---|
+| `banned-imports`, `class-size`, `collapsible-flow`, `duplicates`, `identical-branches`, `inline-anon-types`, `magic-constants`, `nesting`, `non-null-assertion`, `scattered-constants`, `string-hazards`, `test-assertions`, `unused-code`, `weight-of-class` | line + file | `banned_imports`, `class_size`, `collapsible_flow`, `duplication`, `identical_branches`, `inline_record_types`+`record_size`, `magic_constants`, `nesting`, `non_null_assertion`, `scattered_constants`, `string_hazards`, `test_assertions`, `unused_code`, `weight_of_class` |
+| `file-naming`, `unused-files` | file only (violations have no line) | `file_naming`, `unused_files` |
+| `folder-structure` | none — violations name directories, which no comment addresses | `folder_structure` |
+| `mutation` | none — its summary carries the pre-aggregated score, which would desync from the filtered violation list | `mutation` |
+| `profile`, `memory`, `similarity`, `skill`, `reorder`, analyze | none — informational or transform commands, not gates | — |
+
+Upstream gate families with no crap4js counterpart (`loc`,
+`test_coverage`, `complexity`, `method_size`, `record_named_fields`,
+`public_docs`, `hardcoded_strings`, `accessibility`, `golden`,
+`broken_goldens`, `external`) are simply not ignorable here.
 
 ### nesting
 
@@ -576,6 +659,106 @@ glob-regex caching (compile per pattern, not per file) is likewise
 already the port's shape — rules are compiled once per run before the
 file loop. The 0.8.7 stable N/A-row ordering (tie-break by file:line)
 was already the port's sort contract.
+
+### scattered-constants
+
+Port of the crap4dart scattered_constants gate (commit e766d68, v2) —
+the corpus-wide sibling of `magic-constants`: that gate counts in-file
+repeats only, so a literal used once per file in K files is invisible to
+every per-file gate. The command scans the whole corpus, counts distinct
+files per literal value, and distinguishes two findings.
+
+*Constant regression*: the corpus already declares a named `const` with
+the value — every hardcoded re-introduction (a bare literal or a
+duplicate local `const`, any occurrence count, including the declaring
+file) is flagged immediately as `hardcoded <value> duplicates constant
+\`NAME\` (file:line) — reference the constant instead of repeating the
+literal`; no `--min-files` wait. The first declaration wins when
+constants share a value; the winning declaration's own site never flags
+itself, while a bare literal next to it in the same file does.
+
+*Scattered literal*: no constant exists yet and the value reached
+`--min-files` (default 3) distinct files — one violation per occurrence
+(file plus line): `literal <value> repeats in N files (M occurrences) —
+extract a shared constant and reference it from every site; verify all
+occurrences mean the same thing first`. The gate highlights, intent
+stays human — the same value is sometimes coincidence.
+
+Values compare semantically: string literals by value (expression-less
+template literals included), numbers by numeric value — digit separators
+(`86_400`) do not split a fact (`magic-constants` counts raw lexemes;
+this gate does not). Literals never counted: strings shorter than
+`--min-length` (default 4), numbers with magnitude at or below
+`--min-value` (default 100), map keys, computed member indexes and
+switch case labels (the protocol-identifier rule shared with
+`magic-constants`), and import/export source specifiers (the JS analog
+of upstream's exempt import/export/part/part-of URIs). Interpolated
+templates and computed initializers never register as constants; a
+`const` whose initializer is a plain string/number literal registers
+exactly one const-decl site. The floors and the ignore list bind the
+constant corpus too (upstream's `_coincidence`): small ints (exit codes,
+pixel codes, cache versions) and ignored values are coincidence by
+doctrine — they neither collide in the regression rule nor seed the
+registry, and const-decl initializer hits pass through the same
+minValue/ignore guards as use-site literals (upstream's original
+const-decl bypass surfaced 3-file scatter groups for int 1/2 once the
+corpus stopped absorbing small values).
+
+*Pure alias*: a private `const` whose initializer is another constant's
+identifier — `const _appName = NAME;` — is flagged as adding a name
+without information; the message says to reference the shared constant
+directly (`alias \`_appName\` adds no information — reference \`NAME\`
+directly`). Public declarations are exempt (re-export shims are a
+deliberate API shape), computed initializers are not aliases, and the
+rule is switchable with `--aliases`/`--no-aliases` (default on).
+
+`--ignore VALUE` exempts a value permanently: strings by value, numbers
+by their decimal form — generic vocabulary whose extraction adds churn
+without benefit. Entries containing a `/` are file-path globs instead:
+files matching them are exempt entirely (a plain word silences the word,
+not a folder). `--exclude GLOB` drops files from the count altogether;
+the default `src/` selection already excludes test files — the JS-side
+default for upstream's generated + `test/**` exclude globs (crap4js has
+no generated-code convention). Flags: `--min-files` (int ≥ 0, default
+3), `--min-length`, `--min-value`, repeatable `--ignore`/`--exclude`,
+`--aliases`/`--no-aliases` (upstream's `aliases` bool, default true);
+`--flag VALUE` and `--flag=VALUE` both accepted, any other argument is a
+path. Exit 2 iff violations exist; unknown flags (`--x=y`) and invalid
+numbers are usage errors (exit 1).
+
+Adaptation notes: upstream's config surface (`enabled`, `severity`,
+`ignorable`, `min_files`, `min_length`, `min_value`, `ignore`,
+`exclude`, `aliases`) becomes the flags above — crap4js has no config
+file; the gate is default-on as a subcommand. Upstream's `deep_search`
+option and the short-lived `scattered_fragments` gate were both removed
+again in the same upstream commit (v2) and were never ported. Dart
+adjacent-strings merging has no JS analog (no literal juxtaposition), so
+no merged-value handling exists. The port reuses `magic-constants'`
+protocol-identifier and literal-kind helpers (the JS analog of
+upstream's shared literal_locations.dart extraction).
+
+Privacy: upstream flags library-private (`_`-prefixed) Dart constants;
+JS has no library privacy, so the port keeps the lexical `_`-prefix
+convention — `export const _x = kY` still flags (the underscore, not
+the export, is the signal), mirroring how the Dart analyzer treats
+library-private declarations regardless of export.
+
+Dogfood (upstream a314b485, warnings 62 → 0): this repo runs the gate
+on its own `src/`. The upgraded gate went from 124 warnings on the
+pre-port tree (45 regressions + 79 scattered) to 1 documented residue:
+shared vocabulary — AST node names (`complexity.js`), source/TS/runnable
+extension sets (`files.js`), and CLI/config spellings (`constants.js`:
+`test`, `--test`, `--threshold`, `coverage`, the default coverage path,
+`exclude`, `ignore`, `string`, the 1000 unit scale) — got one home per
+spelling and is referenced at every use site; the mutant verdicts moved
+next to the cache that persists them. The residue: mutation's
+`DEFAULT_MAX_MUTANTS = 500` coincides with memory's
+`DEFAULT_BADGE_THRESHOLD = 500` while naming two different facts (max
+mutants per run vs badge churn threshold) — upstream exempts such
+coincidences via its `ignore` config; crap4js has none, so the code
+comment at the site carries the documentation. The mutator's
+`test/src/<base>.test.js` candidate spellings survive as interpolated
+templates (not counted).
 
 ### duplicates
 
@@ -764,16 +947,47 @@ anonymous types in signatures`. Exit 2 iff violations exist.
 
 ### folder-structure
 
-Port of the crap4dart 0.9.x folder_structure gate with max_loose_files=0
-and the default dir baked in (`src`, the port's source root): flags
-directories containing more than zero source files DIRECTLY —
-`N loose files directly in src — group them into feature packages
-(max 0)`. Only direct children count (non-recursive; every source
-extension, test colocates included); files in subdirectories are the
-organized form; a missing `src/` checks nothing and passes. Summary:
+Port of the crap4dart folder_structure gate (commit 753c3580). Flags
+directories holding more than their cap of logical source units
+DIRECTLY — a flat-file sprawl that should be organized into feature
+packages. Only a directory's OWN contents count (non-recursive; every
+source extension, test colocates included) — files in subdirectories
+are the organized form and never reach the parent's budget; a missing
+directory checks nothing and passes. Violation: `N loose files directly
+in DIR — group them into feature packages (max CAP)`. Summary:
 `M directories organized into packages` / `N directory(ies) with
-loose-file sprawl`. Takes no arguments — any argument is a usage error
-(exit 1).
+loose-file sprawl`.
+
+Two configuration shapes, mapped from upstream's YAML `dirs`/
+`max_loose_files`/`config` keys to flags:
+
+- **Classic** (default `--dir src`, `--max-loose-files 0`): every
+  repeatable `--dir GLOB` entry — a literal path or a glob pattern
+  (`src/*`, `packages/**`) expanding to every matching directory —
+  shares one `--max-loose-files N` cap. With no `--dir` flags the
+  default `src` (the port's source root) applies.
+- **Per-pattern caps**: repeatable `--cap PATTERN:N` entries are
+  upstream's `config` map (`--cap 'src:3' --cap 'src/**:30'` — a
+  registry folder may hold more than a hot core directory). When any
+  `--cap` is present it takes precedence and `--dir`/`--max-loose-files`
+  are not consulted. A directory matched by several caps uses the FIRST
+  cap's value (flag order). Non-integer caps are usage errors (exit 1).
+
+Counting rules: generated siblings of one source file collapse into a
+single logical unit — the js-idiomatic suffix set `.d.ts` (declaration
+files) and `.min.js` (minified bundles): `magic.js`, `magic.d.ts` and
+`magic.min.js` share the stem `magic` and count once (upstream's dart
+set is `.g.dart`/`.freezed.dart`; everything else, e.g. `foo.g.js`,
+counts as its own unit). `--exclude GLOB` (repeatable, matched on the
+project-relative path) drops files from the count. Glob expansion never
+enumerates hidden entries (dot-prefixed: `.git`, `.idea`, ...) or build
+and tooling output (`node_modules`, `build`, `dist`, `coverage`).
+Positional arguments stay a usage error — directories are selected by
+flag, not by path (exit 1). With no flags the verdict on ordinary
+source trees matches the pre-flag version (default `src`, cap 0); stem
+collapse is unconditional, so a directory holding generated siblings of
+one file counts fewer logical units than the old raw-file count. Exit 2
+iff violations exist.
 
 ### mutation
 
@@ -952,6 +1166,248 @@ Dogfooding matches upstream: the port's own md corpus (README, spec,
 CHANGELOG) measures clean at jaccard 0.6 / containment 0.9 and still at
 0.5/0.85.
 
+### string-hazards
+
+`crap4js string-hazards [--severity warning|error] [paths...]` (port of
+the crap4dart string_hazards gate, upstream spec §11.25, commit
+62fec6833e) flags string literals whose escaping or pattern usage
+contradicts what the author almost certainly meant, from the parsed
+AST only. Three finding kinds, with the JS host mapping:
+
+1. **Escaped interpolation** — inside a template literal, a `\$` followed
+   by an identifier (optionally brace-enclosed: `\${name}`) renders the
+   literal text `$name`. The gate flags such an occurrence only when the
+   same ROOT identifier is genuinely interpolated elsewhere in the same
+   file (sibling-interpolation evidence); otherwise the escape is
+   presumed deliberate (shell text, prices). Root of an interpolated
+   expression: `user.name` → `user`, `a.b.c` → `a`,
+   `builder.build()` → `builder`; computed member access (`list[0]`) and
+   bare calls (`g()`) provide no root, like upstream's index/call
+   expressions. Violations dedupe per (line, identifier). JS omissions,
+   documented: plain `'...'` strings never interpolate, so they are not
+   scanned (Dart's non-raw strings do interpolate); tagged templates
+   (`String.raw` and friends) are out of scope, like upstream's raw
+   strings.
+2. **RegExp source with an escaped anchor** — a regex literal `/...\$/`
+   or the first string argument of `RegExp(...)` / `new RegExp(...)`
+   ending with `\$` or starting with `\^`. The check reads the regex
+   SOURCE — for string arguments the decoded value (`'...\\$'` survives
+   into the regex as `\$`), for regex literals the pattern text — so a
+   plain `$`/`^` stays an anchor and only the escaped form flags.
+   Non-literal arguments are skipped.
+3. **Anchors in literal String patterns** — a string literal passed as
+   the first argument of a receiver call `x.replace` / `x.replaceAll` /
+   `x.split` (String patterns match literally) whose text starts with
+   `^` or ends with an unescaped `$`. Bare `split(...)` calls without a
+   receiver are out of scope (upstream: `target == null`). The escaped
+   trailing form is spared via the raw source text — `'abc\$'` shows
+   dollar awareness, `'abc$'` flags (the JS analog of upstream's
+   raw-vs-escaped trailing-`$` distinction). Dart's adjacent-strings
+   part scan has no JS analog (no literal juxtaposition;
+   `'a' + 'b$'` arguments are non-literal and skipped), matching the
+   magic-constants precedent.
+
+Upstream's `replaceFirstMapped` / `replaceAllMapped` have no JS analog;
+`replace` covers the replace family. Severity: **warning by default** —
+findings are printed but exit 0 (upstream's warning severity has no
+gate-framework counterpart in crap4js; this is the port's first
+warning-default gate, consistent with the go/py ports);
+`--severity error` exits 2. Unknown `--flag=...` and unknown severity
+values are usage errors (exit 1). Violations honor ignore markers
+(`string-hazards` is in `IGNORABLE_GATES`). Upstream's
+`enabled`/`ignorable` config keys map to the port's conventions: the
+gate is default-on as a subcommand, and ignorable is the hard-coded
+registry entry. Dogfood: the gate runs clean on crap4js's own `src/`
+(37 files, 0 findings).
+
+### identical-branches
+
+`crap4js identical-branches [--severity warning|error] [paths...]`
+(port of the crap4dart identical_branches gate, upstream spec §11.26,
+commit c6b2425add) flags the copy-paste-edit bug family — syntactically
+identical pieces inside one construct where a second, slightly different
+piece was intended. All comparisons use a canonical form:
+whitespace-, comment- and parenthesis-independent (babel drops parens
+and comments; the serializer walks the AST structurally, literals
+compare by value), operands of commutative operators (`==`, `!=`,
+`===`, `!==`, `&&`, `||`, `+`, `*`, `&`, `|`, `^`) sorted, same-operator
+nests of the associative operators (`&&`, `||`, `+`, `*`, `&`, `|`, `^`)
+flattened. Non-commutative operators (`<`, `>`, `<=`, `>=`, `-`, `/`,
+`??`, ...) keep their operand order and shape: `a < b` and `b < a` stay
+distinct, `a - (b - c)` never flattens. Six finding kinds, with the JS
+host mapping:
+
+1. **Duplicate conditions** — two links of one `if`/`else if` chain
+   whose conditions compare equal; every later branch is unreachable.
+2. **Duplicate branch bodies** — two bodies in one chain whose
+   statements compare equal; a single-statement block compares equal to
+   the naked statement, and the violation points at the unwrapped
+   statement's line. An `else` equal to its `then` flags.
+3. **Duplicate operands and absorbed operands** — one `&&`/`||` chain
+   whose flattened operand list contains a repeated canonical operand
+   (`a || a` collapses to `a`), or an operand that also appears
+   standalone as another top-level operand's conjunct (for `||`) or
+   disjunct (for `&&`) — the absorption law (`a || b && a` collapses to
+   `a`). Only the outermost link of a same-operator chain is checked;
+   parenthesized links are transparent (`a || (b || c)` is one chain).
+4. **Identical ternary branches** — a conditional expression whose then
+   and else expressions compare equal (`c ? x : x` — the condition is
+   dead).
+5. **Duplicate positional arguments** — one call whose positional
+   argument list contains a repeated canonical argument, reported as
+   `(same as argument N)` against the positional slots. JS adaptations,
+   documented: JS has no named/keyword arguments, so upstream's
+   named-argument exemption has no analog — an options object is one
+   positional value like any other (two equal options objects in one
+   call flag); a spread element occupies no fixed slot and is exempt.
+   All-literal argument lists are exempt (uniform-value APIs like
+   `rect(8, 8, 8, 4)` stay quiet) and a literal argument is never
+   reported as the repeat.
+6. **Duplicate handler bodies** — JS's `try` admits exactly one catch
+   clause, so upstream's duplicate-catch-bodies check maps to the only
+   remaining same-construct handler pair: catch body vs finally body.
+   Identical failure and unconditional paths double-execute the same
+   code — a copy-paste where the two were meant to differ. The violation
+   points at the finally body (the later occurrence in source order,
+   like every repeat report).
+
+Only pieces of the *same* construct are compared; identical conditions
+in separate `if` statements are legal (the state may change between
+them), nested `if`s are their own chains. `switch` is excluded —
+duplicate cases are a syntax error in JS strict mode, so upstream's
+analyzer check has no counterpart. Severity: **warning by default** —
+findings are printed but exit 0; `--severity error` exits 2 (same
+discipline as string-hazards: reordering is equivalence-safe only for
+side-effect-free operands, which pure syntax cannot prove). Unknown
+`--flag=...` and unknown severity values are usage errors (exit 1).
+Violations honor ignore markers (`identical-branches` is in
+`IGNORABLE_GATES`). Upstream's `enabled`/`ignorable` config keys map to
+the port's conventions: the gate is default-on as a subcommand, and
+ignorable is the hard-coded registry entry. Upstream's
+`GateRunner.defaultGates()` duplicate-registration cleanup is N/A here
+— the subcommand dispatch table is a plain object literal (keys unique
+by syntax), verified duplicate-free. Dogfood: the gate runs on
+crap4js's own `src/` (1520 constructs); one finding, a deliberate
+one-line range (`diffIntersects(..., site.line, site.line)`), carries a
+reason-carrying `// ignore:identical-branches` marker — no real slips.
+
+### collapsible-flow
+
+`crap4js collapsible-flow [--severity warning|error] [paths...]`
+(port of the crap4dart collapsible_flow gate, upstream spec §11.28,
+commit 7bdfd64ae1) flags control-flow nesting that a
+semantics-preserving mechanical rewrite can flatten, resolved from the
+parsed AST only. Every finding is correct code — the gate trades
+flatness, not bugs. Three checks, with the JS host mapping:
+
+1. **Collapsible if** — an `if` without `else` whose then-branch
+   contains only one statement that is itself an `if` without `else`
+   (a block with the single inner `if` equals the naked statement, so
+   both braced and unbraced shapes flag). The two conditions merge
+   into a single `&&` condition; short-circuit evaluation preserves
+   order, so the merge is always equivalent (including `await`ed or
+   side-effecting conditions). JS has no pattern conditions
+   (`if (x case P)` is Dart-only), so upstream's pattern-clause
+   exclusion has no analog here.
+2. **Redundant else** — an `if`/`else` whose then-branch always exits:
+   ends with `return`, `break`, `continue`, or `throw` (JS's `throw`
+   is a statement; Dart's `throw`/`rethrow` expressions map to
+   `ThrowStatement`, and there is no rethrow), a block whose last
+   statement exits, an `if`/`else` pair whose both branches exit, or a
+   `try` whose body exits and whose finally is absent, empty, or
+   exits. The `else` is redundant and its body dedents. An inner `if`
+   without an `else` shall never count as exiting (control falls
+   through when its condition is false — the upstream's own
+   hard-learned trap); `switch` bodies shall not be analyzed (case
+   fall-through), so a trailing `switch` never counts; catch handlers
+   are not analyzed either — body and finalizer decide, like upstream.
+3. **Chain after terminal then** — an `else if` following an
+   always-exiting then-branch, flagged as a flattening hint (guard
+   sequence or dispatch table); the rewrite is not mechanical, so the
+   message shall not promise a specific fix. JS spells `else if` as
+   the if's `alternate` being another `IfStatement` (no distinct node).
+
+Labeled statements and loops are not analyzed either, so they never
+count as exiting (conservative, like upstream). Severity: **warning by
+default** — findings are printed but exit 0; `--severity error` exits
+2 (every finding is correct code, the string-hazards discipline).
+Unknown `--flag=...` and unknown severity values are usage errors
+(exit 1). Violations honor ignore markers (`collapsible-flow` is in
+`IGNORABLE_GATES`); upstream's `enabled`/`ignorable` config keys map to
+the port's conventions: default-on subcommand, hard-coded registry
+entry. Upstream's QualityGatesConfig subgroup refactor is N/A here —
+crap4js has no config file (the port keeps its own flat conventions;
+no subgroup anywhere to refactor). Dogfood: the first self-scan of
+crap4js's own `src/` found three sites and all were fixed in-commit —
+one collapsible if in `duplicates.js` (`collectFunctionLocals`,
+conditions merged) and two redundant else bodies in the
+`profile.js`/`reorder.js` flag parsers (the fallback dedents behind
+the exiting throw, still guarded by the same branch — in a flat
+else-if chain a blind dedent would move the fallback out of the
+chain's else scope and change behavior, which the profile arg tests
+caught during the port). The gate now runs clean on `src/`
+(37 files, 509 if statements checked).
+
+### non-null-assertion
+
+`crap4js non-null-assertion [--severity warning|error] [paths...]`
+(port of the crap4dart non_null_assertion gate, upstream spec §11.29,
+commit e3ad58594c) flags every TS non-null assertion, resolved from
+the parsed AST only. A bang crashes on null where the null-safe
+alternatives carry the same intent with a readable check: `?.`/`??` —
+the common check-then-bang ternary `E != null ? E!.m() : f` collapses
+to `E?.m() ?? f` (single receiver evaluation, no bang). The gate
+applies zero thresholds: any `!` is a finding, and every violation
+shall carry the file and line of the `!` token (the bang is the
+flagged node's last character, so the node's end line is the token's
+line — an operand spanning several lines reports where the `!` sits,
+not where the expression starts).
+
+JS host mapping, per shape:
+
+1. **Postfix `!` expression** — Dart's `x!`, `map['k']!`, and chains
+   (`a!.b!`) map to the TypeScript `TSNonNullExpression` node, one
+   node per bang, so a chain reports each `!` separately. Only
+   `.ts`/`.tsx` files can carry the node: @babel/parser routes the
+   typescript plugin by file extension (complexity.js parseSource) and
+   the flow plugin has no such node — a `.js` file can never flag
+   here.
+2. **Null-assert pattern** — Dart's `case var x!:` has no TS analog;
+   omitted, and so is upstream's pattern-side fix, the null-check
+   pattern (`case var x?`).
+
+Not flagged (distinct AST nodes — the exclusions hold by
+construction): `!=`/`!==` (BinaryExpression), the logical-not prefix
+`!x` (UnaryExpression), `++`/`--` (UpdateExpression), null-aware
+access `?.` (OptionalMemberExpression/OptionalCallExpression), and
+`??` (LogicalExpression). A bang inside a string or template literal
+is literal text. Type casts are not bangs: `x as T` parses as
+TSAsExpression, and the angle-bracket cast `<T>x` does not parse at
+all under the port's jsx+typescript routing (ambiguous with JSX), so
+neither reaches this gate.
+
+Summary format: `M files scanned, no non-null assertions` on pass,
+`N non-null assertion(s) (M files scanned)` on findings. Severity:
+**warning by default** — findings are printed but exit 0;
+`--severity error` exits 2. The warning default is upstream's posture:
+on an existing codebase every removed `!` needs a per-site
+nullability audit, and upstream adopts via the baseline ratchet
+(`check --save-baseline`). crap4js ports NO baseline machinery
+(upstream's `--save-baseline`/`--baseline` is in the not-ported list);
+the ratchet stays a manual discipline: record the count this gate
+reports, drive it to zero, then enforce with `--severity error`. Gate
+ordering is N/A — the subcommand runs on demand, not in upstream's
+fixed run order. Unknown `--flag=...` and unknown severity
+values are usage errors (exit 1). Violations honor ignore markers
+(`non-null-assertion` is in `IGNORABLE_GATES`); upstream's
+`enabled`/`ignorable` config keys map to the port's conventions:
+default-on subcommand, hard-coded registry entry. Upstream's
+`gate_configs_quality.dart` reader and its config tests are N/A —
+crap4js has no config file. Dogfood: the first self-scan of crap4js's
+own source found zero bangs (40 files scanned; the repo has no
+`.ts`/`.tsx` files, so the TS-only gate has no surface in this
+codebase yet).
+
 ### not ported from 0.7–0.9 (no crap4js equivalent)
 
 - `broken_goldens` gate + tofu detector + `goldens-guard` command —
@@ -972,6 +1428,56 @@ CHANGELOG) measures clean at jaccard 0.6 / containment 0.9 and still at
   at `process.on('exit')`, which covers the same short-run tail-loss risk.
   Ported instead: the 0.9.5 no-inflation guarantee — via per-pid output
   files (step 3 above) rather than upstream's delta-flush bookkeeping.
+
+## reorder
+
+Port of the crap4dart 0.22.0 reorder command (upstream spec §11.24,
+commit 24a6f24f), a command with a deterministic contract, not a gate:
+`reorder [--dry-run] [paths...]` rewrites class members into the
+canonical order. The same input always produces the same output,
+already-canonical files stay byte-identical (whatever their member
+layout — single-line bodies and members sharing the header line are
+preserved as written), and reordering an already-reordered file does
+not change it (idempotent).
+
+Canonical order — the JS adaptation of the upstream Dart table (JS has
+no const-field kind, so static constants live with static fields):
+static fields (`static x`, `static #x`, `static {}` blocks), instance
+fields (`x`, `#x`, `accessor x`), constructor, static methods
+(public), getters/setters (`get`/`set` at any staticness), public
+methods, private methods (`#m` at any staticness). Kind wins over
+staticness — a `static get g()` is an accessor, a `static #sp()` is a
+private method. This is a documented JS-only deviation: upstream FINAL
+buckets `isStatic` first (a Dart `static getter` lands under static
+methods) and crap4py mirrors that staticness-first ladder; crap4js
+keeps every accessor — however qualified — in one run. Members within
+one category keep their original relative
+order (a stable partition — the command never sorts alphabetically).
+
+Doc comments and whole-line `//` comment blocks above a member move
+with it — including a block separated from the member by a single
+blank line; two or more blank lines detach the block. A detached block
+stays in the file and travels with the member it precedes; comments
+are never dropped (a comment that looks like code, `// fake() {}`, is
+carried, not parsed). Members on the class header line keep the header
+(`class A { // trailing` survives intact), class docs above the opener
+are never stolen, and comments between the last member and the closing
+brace stay put. Only top-level class declarations are reordered —
+`export class` and `export default class` included; class expressions
+and nested classes are untouched, as are TS enums and object literals
+(member order is semantics there — the host analog of upstream's
+never-touch enum bodies). Dart-only member kinds with no JS analog
+(factory constructors, operators as a distinct kind) are omitted.
+
+A file's line-ending style (LF or CRLF) is preserved, as is a missing
+trailing newline. With `--dry-run` the command writes nothing, lists
+the files that would change and exits 2 (0 when everything is already
+canonical); by default it writes the files and exits 0. Default
+selection is the `src/` walk; explicit paths may be files or
+directories with any source extension. Files that fail to parse are
+skipped with a note — never fatal. Transform invariants (idempotence,
+token-multiset preservation, parseability) are verified on a fixture
+corpus and on real repository files.
 
 ## skill
 

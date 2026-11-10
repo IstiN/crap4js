@@ -10,9 +10,11 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, toRelPath } from './files.js';
 import { runCheck } from './gateCommon.js';
+import { NUMERIC_LITERAL, STRING_LITERAL } from './complexity.js';
 import { childrenOf, isNode, parseSource } from './complexity.js';
+import { TEST } from './constants.js';
 
 const MIN_DUPLICATES = 3;
 const MIN_LENGTH = 4;
@@ -30,7 +32,7 @@ export function magicConstantsViolations(files, projectRoot) {
   let checked = 0;
   for (const file of files) {
     checked++;
-    const ast = parseSource(readFileSync(file, 'utf8'), path.extname(file));
+    const ast = parseSource(readFileSync(file, UTF8), path.extname(file));
     violations.push(...fileViolations(ast.program, toRelPath(file, projectRoot)));
   }
   return { violations, checked };
@@ -84,10 +86,11 @@ function visit(node, parent, state) {
 // non-literals. Numbers count by raw lexeme, strings by value; template
 // literals with interpolations are skipped entirely (JS has no adjacent-
 // string concatenation, so no merged-value handling is needed).
-function literalValue(node) {
+// Shared with the scattered-constants gate (upstream literal_locations.dart).
+export function literalValue(node) {
   // Babel keeps the raw lexeme in `extra.raw`.
-  if (node.type === 'NumericLiteral') return node.extra?.raw ?? String(node.value);
-  if (node.type === 'StringLiteral') return node.value;
+  if (node.type === NUMERIC_LITERAL) return node.extra?.raw ?? String(node.value);
+  if (node.type === STRING_LITERAL) return node.value;
   if (node.type === 'TemplateLiteral' && node.expressions.length === 0) {
     return node.quasis[0]?.value?.cooked;
   }
@@ -99,7 +102,7 @@ function record(node, parent, state) {
   const value = literalValue(node);
   if (value === undefined || value.length < MIN_LENGTH) return;
   const line = node.loc.start.line;
-  if (node.type === 'NumericLiteral' && HEX_COLOR.test(value)) {
+  if (node.type === NUMERIC_LITERAL && HEX_COLOR.test(value)) {
     state.hexColors.push({ line });
   }
   const occurrences = state.counts.get(value) ?? [];
@@ -112,16 +115,17 @@ function record(node, parent, state) {
 // JSON field, channel, or enum value — not a magic constant; extracting
 // it adds noise (crap4dart 0.7.2 / 0.8.3 / 0.8.5). Maps the parent node
 // type to the child field that holds the key/index/label.
+// Shared with the scattered-constants gate (upstream literal_locations.dart).
 const IDENTIFIER_POSITIONS = {
   ObjectProperty: 'key',
   MemberExpression: 'property',
   OptionalMemberExpression: 'property',
-  SwitchCase: 'test',
+  SwitchCase: TEST,
 };
 
-function isIdentifierPosition(node, parent) {
+export function isIdentifierPosition(node, parent) {
   const field = IDENTIFIER_POSITIONS[parent?.type];
-  return field !== undefined && node.type === 'StringLiteral' && parent[field] === node;
+  return field !== undefined && node.type === STRING_LITERAL && parent[field] === node;
 }
 
 // Every line a node spans — a literal anywhere inside a const initializer
@@ -154,5 +158,6 @@ export function runMagicConstants(argv, ctx) {
     gateFiles(argv, ctx.cwd),
     magicConstantsViolations,
     magicConstantsSummary,
+    'magic-constants',
   );
 }

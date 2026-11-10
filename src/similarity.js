@@ -14,7 +14,8 @@
 
 import path from 'node:path';
 import { readFileSync, statSync } from 'node:fs';
-import { expandPaths, toRelPath } from './files.js';
+import { EXCLUDE, THRESHOLD_FLAG } from './constants.js';
+import { SOURCE_EXTENSIONS, UTF8, expandPaths, toRelPath } from './files.js';
 import { globToRegExp } from './bannedImports.js';
 import { applyGateArg } from './gateCommon.js';
 
@@ -39,7 +40,8 @@ const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdx']);
 // Source code extensions (any language — the normalizer is
 // language-agnostic token shaping).
 const CODE_EXTENSIONS = new Set([
-  '.dart', '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.java', '.py',
+  ...SOURCE_EXTENSIONS,
+  '.dart', '.java', '.py',
   '.kt', '.kts', '.swift', '.go', '.rs', '.c', '.h', '.cpp', '.hpp', '.cs',
   '.rb', '.php', '.scala', '.gradle', '.groovy', '.sh', '.sql',
 ]);
@@ -228,7 +230,7 @@ export function analyzeSimilarity(projectRoot, opts) {
   let skipped = 0;
   for (const file of collect(projectRoot, opts.dirs, include, exclude)) {
     const shingles = shinglesFor(
-      readFileSync(file, 'utf8'),
+      readFileSync(file, UTF8),
       profileFor(toRelPath(file, projectRoot)),
     );
     if (shingles.size < opts.minShingles) {
@@ -338,7 +340,7 @@ const VALUE_FLAGS = {
   '--containment': 'containment',
   '--min-shingles': 'minShingles',
   '--include': 'include',
-  '--exclude': 'exclude',
+  '--exclude': EXCLUDE,
 };
 const NUMBER_FLAGS = new Set(['--jaccard', '--containment', '--min-shingles']);
 const FORMATS = new Set(['console', 'json']);

@@ -39,32 +39,38 @@ import { spawnSync } from 'node:child_process';
 import { childrenOf, extractMethodsWithNodes, isNode, parseTokenized } from './complexity.js';
 import { loadCoverage } from './coverage.js';
 import { globToRegExp } from './bannedImports.js';
-import { gateFiles, isTestPath, toRelPath } from './files.js';
+import { UTF8, gateFiles, isTestPath, toRelPath } from './files.js';
+import { COVERAGE, DEFAULT_COVERAGE, EXCLUDE, IGNORE, MILLIS_PER_SECOND, STRING, TEST, TEST_FLAG } from './constants.js';
+import { NUMERIC_LITERAL } from './complexity.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
 import { diffIntersects, gitChangedLines } from './diffLines.js';
-import { MUTATION_CACHE_FILE_NAME, MutationCache, cacheMetaCurrent, fnv1a64Hex, methodsKey } from './mutationCache.js';
+import { KILLED, MUTATION_CACHE_FILE_NAME, MutationCache, SURVIVED, TIMEOUT, cacheMetaCurrent, fnv1a64Hex, methodsKey } from './mutationCache.js';
 
 const DEFAULT_MIN_SCORE = 0.8;
 const DEFAULT_MAX_SURVIVORS = 0;
 const DEFAULT_TIMEOUT_SECONDS = 60;
-const DEFAULT_MAX_MUTANTS = 500;
-const DEFAULT_COVERAGE = 'coverage/coverage-final.json';
+// 500 coincides with memory's DEFAULT_BADGE_THRESHOLD — different facts
+// (max mutants per run vs badge churn threshold): the documented residue
+// of the scattered-constants dogfood (upstream exempts such coincidences
+// via its `ignore` config; here the granular marker below silences it).
+const DEFAULT_MAX_MUTANTS = 500; // ignore:scattered-constants
 // The per-mutant suite invocation (`node <testArgs...>`), the analog of
 // upstream's `test_args` default `['test']` for `dart test`.
-const DEFAULT_TEST_ARGS = ['--test'];
+const DEFAULT_TEST_ARGS = [TEST_FLAG];
 const DEFAULT_CACHE = true;
 // Per-mutant test scoping (upstream `scope_tests`, default false).
 const DEFAULT_SCOPE_TESTS = false;
 
 // Operator categories of the `mutation` gate, in stable order (upstream
 // `mutationOperatorCategories`). `--operators` accepts any subset.
+const CONSTANT_CATEGORY = 'constant';
 export const OPERATOR_CATEGORIES = [
   'arithmetic',
   'boundary',
   'equality',
   'logical',
   'boolean',
-  'constant',
+  CONSTANT_CATEGORY,
   'unary',
 ];
 
@@ -73,7 +79,6 @@ export const OPERATOR_CATEGORIES = [
 // BinaryExpression/LogicalExpression operator lexemes; the constant row
 // fires on `-1` prefixes too; literal rows match boolean/numeric literal
 // lexemes. One row = one mutant, so `/` produces two sites.
-const CONSTANT_CATEGORY = 'constant';
 const OPERATORS = [
   ['arithmetic', '+', '-'],
   ['arithmetic', '-', '+'],
@@ -96,15 +101,13 @@ const OPERATORS = [
   ['logical', '||', '&&'],
   ['boolean', 'true', 'false'],
   ['boolean', 'false', 'true'],
-  ['constant', '0', '1'],
-  ['constant', '1', '0'],
+  [CONSTANT_CATEGORY, '0', '1'],
+  [CONSTANT_CATEGORY, '1', '0'],
 ];
 
-// Mutant verdicts: non-zero test exit kills (module-load failures
-// included), a clean pass survives, a timeout survives.
-export const KILLED = 'killed';
-export const SURVIVED = 'survived';
-export const TIMEOUT = 'timeout';
+// Mutant verdicts live with the cache that persists them; re-exported
+// here (public re-export shim, exempt from the aliases rule).
+export { KILLED, SURVIVED, TIMEOUT };
 
 // Thrown when the test command cannot be spawned at all; the gate turns
 // this into a skipped result.
@@ -138,7 +141,7 @@ export function detectSites(source, ext, enabled = OPERATOR_CATEGORIES) {
 // Babel emits comments inside the token stream as bare strings; real
 // tokens carry a type object (same skip as tokenizeSource).
 function realToken(t) {
-  return typeof t.type !== 'string' && t.type.label !== 'eof';
+  return typeof t.type !== STRING && t.type.label !== 'eof';
 }
 
 function visit(node, ctx, sites) {
@@ -156,7 +159,7 @@ function siteFor(node, ctx, sites) {
     unarySites(node, ctx, sites);
   } else if (node.type === 'BooleanLiteral') {
     booleanSite(node, ctx, sites);
-  } else if (node.type === 'NumericLiteral') {
+  } else if (node.type === NUMERIC_LITERAL) {
     numericSite(node, ctx, sites);
   }
 }
@@ -363,7 +366,7 @@ function recordOutcome(site, outcome, state) {
 }
 
 function executeSite(projectRoot, site, timeoutMs, runner, testArgs) {
-  const original = readFileSync(site.file, 'utf8');
+  const original = readFileSync(site.file, UTF8);
   writeFileSync(site.file, original.slice(0, site.offset) + site.mutant + original.slice(site.offset + site.length));
   try {
     return runner(projectRoot, timeoutMs, testArgs);
@@ -377,7 +380,7 @@ function executeSite(projectRoot, site, timeoutMs, runner, testArgs) {
 function snapshotOriginals(sites) {
   const originals = new Map();
   for (const s of sites) {
-    if (!originals.has(s.file)) originals.set(s.file, readFileSync(s.file, 'utf8'));
+    if (!originals.has(s.file)) originals.set(s.file, readFileSync(s.file, UTF8));
   }
   return originals;
 }
@@ -387,7 +390,7 @@ function snapshotOriginals(sites) {
 function verifyIntegrity(originals) {
   const violations = [];
   for (const [file, content] of originals) {
-    if (readFileSync(file, 'utf8') !== content) {
+    if (readFileSync(file, UTF8) !== content) {
       writeFileSync(file, content);
       violations.push(file);
     }
@@ -445,7 +448,7 @@ function mutantEnv() {
 export function runMutantTests(projectRoot, timeoutMs, spawn = spawnSync, testArgs = DEFAULT_TEST_ARGS) {
   const r = spawn(process.execPath, testArgs, {
     cwd: projectRoot,
-    stdio: 'ignore',
+    stdio: IGNORE,
     timeout: timeoutMs,
     env: mutantEnv(),
   });
@@ -515,7 +518,7 @@ export function mutationViolations(files, projectRoot, opts, deps = {}) {
     engine = runEngine(
       projectRoot,
       selection.sites,
-      opts.timeoutSeconds * 1000,
+      opts.timeoutSeconds * MILLIS_PER_SECOND,
       deps.runner ?? ((root, ms, args) => runMutantTests(root, ms, spawnSync, args)),
       openCache(projectRoot, opts, selection),
       opts.scopeTests ? (site) => scopedTestArgs(projectRoot, site) : null,
@@ -562,7 +565,7 @@ function scopedTestArgs(projectRoot, site) {
   const base = rel.slice('src/'.length, rel.length - path.extname(rel).length);
   const candidates = [`test/src/${base}.test.js`, `test/${base}.test.js`];
   const existing = candidates.filter((c) => existsSync(path.join(projectRoot, c)));
-  return existing.length === 0 ? null : ['--test', ...existing];
+  return existing.length === 0 ? null : [TEST_FLAG, ...existing];
 }
 
 function warnIntegrity(count) {
@@ -600,7 +603,7 @@ function selectSites(files, projectRoot, opts, coverage) {
 }
 
 function scanFileSites(file, scan) {
-  const source = readFileSync(file, 'utf8');
+  const source = readFileSync(file, UTF8);
   const rel = toRelPath(file, scan.projectRoot);
   const methods = extractMethodsWithNodes(source, { ext: path.extname(file) });
   const hits = lineHits(scan.coverage.get(rel));
@@ -630,7 +633,8 @@ function scanFileSites(file, scan) {
 function inDiff(scan, rel, site, method) {
   if (!scan.diff) return true;
   if (method) return diffIntersects(scan.diff, rel, method.startLine, method.endLine);
-  return diffIntersects(scan.diff, rel, site.line, site.line);
+  // One-line range on purpose: the site's own line is both range ends.
+  return diffIntersects(scan.diff, rel, site.line, site.line); // ignore:identical-branches — deliberate one-line range
 }
 
 // The method whose node span contains `offset`, or null.
@@ -703,8 +707,8 @@ const VALUE_FLAGS = {
   '--max-survivors': 'maxSurvivors',
   '--timeout-seconds': 'timeoutSeconds',
   '--max-mutants': 'maxMutants',
-  '--coverage': 'coverage',
-  '--exclude': 'exclude',
+  '--coverage': COVERAGE,
+  '--exclude': EXCLUDE,
   '--operators': 'operators',
   '--test-args': 'testArgs',
   '--diff-base': 'diffBase',
@@ -812,6 +816,7 @@ export function runMutation(argv, ctx) {
     files,
     (fs, root) => mutationViolations(fs, root, opts),
     mutationSummary,
+    'mutation',
   );
 }
 
@@ -820,6 +825,6 @@ function skipReason(projectRoot, opts) {
   if (!existsSync(path.resolve(projectRoot, opts.coverage))) {
     return 'no coverage data (run the tests with coverage first)';
   }
-  if (!existsSync(path.join(projectRoot, 'test'))) return 'no test directory';
+  if (!existsSync(path.join(projectRoot, TEST))) return 'no test directory';
   return null;
 }
