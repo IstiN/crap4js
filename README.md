@@ -63,7 +63,8 @@ crap4js nesting [...]    Fail functions whose control-flow nesting exceeds 5.
 crap4js class-size [...]  Fail god classes (>25 methods or WMC >80).
 crap4js weight-of-class [...]  Fail data-heavy classes (field ratio >0.33).
 crap4js unused-code [...]  Flag module-private declarations never referenced.
-crap4js unused-files [...]  Flag source files never imported.
+crap4js unused-files [--exclude GLOB]... [paths...]
+                         Flag source files never imported.
 crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]
                          Enforce architectural import boundaries.
 crap4js magic-constants [paths...]
@@ -338,14 +339,21 @@ partial file set yields false positives.
 
 ## `unused-files`
 
-`crap4js unused-files` (port of crap4dart's unused_files gate) flags
-non-test source files that are never imported by any analyzed non-test
-file. Relative import specifiers are resolved against the importing
-file's directory (trying the exact path, source extensions, and
-`/index.<ext>`); bare specifiers name external packages and never count.
-Static imports, re-exports, dynamic `import()`, and `require()` are all
-collected. Like `unused-code`, this is a whole-project check: with
-explicit paths it prints the skip message and exits 0.
+`crap4js unused-files [--exclude GLOB]...` (port of crap4dart's
+unused_files gate) flags non-test source files that are never imported by
+any analyzed source or test file. Relative and `tsconfig.json` /
+`jsconfig.json` `compilerOptions.paths` alias specifiers are resolved
+against the importing file's directory or `baseUrl` (trying the exact
+path, source extensions including React Native `.ios`/`.android`/`.native`
+variants, and `/index.<ext>`); bare specifiers name external packages and
+never count. Static imports, re-exports, dynamic `import()`, and
+`require()` are all collected across both `src/` sources and test files
+(so shared test fixtures under `src/` imported by `*.test.*` are not
+falsely flagged). Repeatable `--exclude GLOB` filters entrypoints or
+ambient files (e.g. `--exclude 'src/index.tsx' --exclude 'src/**/*.d.ts'`)
+from the candidate list while still scanning their outgoing imports. Like
+`unused-code`, this is a whole-project check: with explicit paths it
+prints the skip message and exits 0.
 
 ## `banned-imports`
 

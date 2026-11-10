@@ -5,12 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import {
+  parseUnusedFilesArgs,
   runUnusedFiles,
   unusedFilesSummary,
   unusedFilesViolations,
 } from '../src/unusedFiles.js';
 import { gateFiles } from '../src/files.js';
-import { resolveImport } from '../src/imports.js';
+import { resolveImport, resolveImports } from '../src/imports.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -186,4 +187,58 @@ test('explicit path selection skips with a message and exits 0', () => {
 test('unusedFilesSummary lines', () => {
   assert.equal(unusedFilesSummary({ violations: 0, checked: 3 }), '3 files all imported');
   assert.equal(unusedFilesSummary({ violations: 1, checked: 3 }), '1/3 files never imported');
+});
+
+test('resolveImports resolves React Native platform-specific extensions (.ios/.android/.native)', () => {
+  const root = fixture({
+    'main.tsx': "import { Switch } from './Switch';\nexport const App = Switch;\n",
+    'Switch/index.ts': "export * from './Switch';\n",
+    'Switch/Switch.ios.tsx': 'export const Switch = () => null;\n',
+    'Switch/Switch.android.tsx': 'export const Switch = () => null;\n',
+  });
+  try {
+    const importer = path.join(root, 'src', 'Switch', 'index.ts');
+    assert.deepEqual(resolveImports('./Switch', importer, root).sort(), [
+      'src/Switch/Switch.android.tsx',
+      'src/Switch/Switch.ios.tsx',
+    ]);
+    const { violations } = unusedFilesViolations(gateFiles([], root), root);
+    assert.deepEqual(violations.map((v) => v.file), ['src/main.tsx']);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('runUnusedFiles counts imports from test files and respects --exclude globs', () => {
+  const root = fixture({
+    'index.tsx': "import './app';\n",
+    'app.ts': 'export const app = 1;\n',
+    'declarations.d.ts': 'declare module "*.svg";\n',
+    'swagger/mockData.ts': 'export const mockShipment = { id: 1 };\n',
+    'dead.ts': 'export const dead = 0;\n',
+    'app.test.ts': "import { mockShipment } from './swagger/mockData';\nexport const t = mockShipment;\n",
+  });
+  try {
+    const ctx = fakeCtx(root);
+    const code = runUnusedFiles(
+      ['--exclude', 'src/index.tsx', '--exclude=src/**/*.d.ts'],
+      ctx,
+    );
+    assert.equal(code, 2);
+    const out = ctx.lines.join('');
+    // index.tsx and declarations.d.ts are excluded; app.ts is imported by index.tsx;
+    // swagger/mockData.ts is imported by app.test.ts; only dead.ts is flagged.
+    assert.match(out, /src\/dead\.ts: never imported by any analyzed source file/);
+    assert.doesNotMatch(out, /mockData/);
+    assert.doesNotMatch(out, /index\.tsx/);
+    assert.doesNotMatch(out, /declarations\.d\.ts/);
+    assert.match(out, /1\/3 files never imported/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('parseUnusedFilesArgs rejects unknown flags', () => {
+  assert.throws(() => parseUnusedFilesArgs(['--bogus']), /unknown flag: --bogus/);
+  assert.throws(() => parseUnusedFilesArgs(['--bogus=1']), /unknown flag: --bogus/);
 });

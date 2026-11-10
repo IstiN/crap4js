@@ -6,8 +6,13 @@ import path from 'node:path';
 import { childrenOf, isNode } from './complexity.js';
 import { toRelPath } from './files.js';
 
-// Extensions tried when resolving an extensionless relative specifier.
-const SOURCE_EXTS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx'];
+// Extensions tried when resolving an extensionless relative specifier,
+// including React Native / Metro platform-specific variants.
+const BASE_EXTS = ['.js', '.mjs', '.cjs', '.jsx', '.ts', '.tsx'];
+const SOURCE_EXTS = [
+  ...BASE_EXTS,
+  ...BASE_EXTS.flatMap((e) => [`.ios${e}`, `.android${e}`, `.native${e}`]),
+];
 const aliasCache = new Map();
 
 /**
@@ -120,11 +125,24 @@ function resolveCandidateBase(specifier, importerFile, projectRoot) {
  * @returns {string|null} project-relative POSIX path, or null.
  */
 export function resolveImport(specifier, importerFile, projectRoot) {
+  return resolveImports(specifier, importerFile, projectRoot)[0] ?? null;
+}
+
+/**
+ * Resolve an import specifier to all matching project-relative paths
+ * (e.g. both `Switch.ios.tsx` and `Switch.android.tsx` when importing
+ * `./Switch`).
+ *
+ * @param {string} specifier
+ * @param {string} importerFile  absolute path of the importing file.
+ * @param {string} projectRoot
+ * @returns {string[]} project-relative POSIX paths.
+ */
+export function resolveImports(specifier, importerFile, projectRoot) {
   const base = resolveCandidateBase(specifier, importerFile, projectRoot);
-  if (!base) return null;
+  if (!base) return [];
   const candidates = [base, ...withExts(base), ...withExts(path.join(base, 'index'))];
-  const hit = candidates.find(isFile);
-  return hit ? toRelPath(hit, projectRoot) : null;
+  return candidates.filter(isFile).map((hit) => toRelPath(hit, projectRoot));
 }
 
 function withExts(p) {

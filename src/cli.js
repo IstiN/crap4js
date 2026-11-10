@@ -16,7 +16,8 @@
 //   crap4js class-size [...]  Fail god classes (>25 methods or WMC > 80).
 //   crap4js weight-of-class [...]  Fail data-heavy classes (fields ratio > 0.33).
 //   crap4js unused-code [...]  Flag module-private declarations never referenced.
-//   crap4js unused-files [...]  Flag source files never imported.
+//   crap4js unused-files [--exclude GLOB]... [paths...]
+//                            Flag source files never imported.
 //   crap4js banned-imports [--from G --forbid G --message M]... [paths...]
 //                            Enforce architectural import boundaries.
 //   crap4js magic-constants [paths...]
@@ -117,8 +118,8 @@ function usage() {
     '                           Fail classes whose public-instance field ratio exceeds 0.33',
     '  crap4js unused-code [paths...]',
     '                           Flag module-private declarations never referenced',
-    '  crap4js unused-files [paths...]',
-    '                           Flag source files never imported by analyzed sources',
+    '  crap4js unused-files [--exclude GLOB]... [paths...]',
+    '                           Flag source files never imported by analyzed sources or tests',
     '  crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]',
     '                           Enforce architectural import boundaries',
     '  crap4js magic-constants [paths...]',
