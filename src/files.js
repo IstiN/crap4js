@@ -203,6 +203,39 @@ export function toRelPath(file, projectRoot) {
   return path.relative(projectRoot, file).split(path.sep).join('/');
 }
 
+/**
+ * Compile a glob into a RegExp (`*` matches within one path segment,
+ * `**` across segments, `?` one character).
+ *
+ * @param {string} glob
+ * @returns {RegExp}
+ */
+export function globToRegExp(glob) {
+  let re = '';
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === '*') {
+      if (glob[i + 1] === '*') {
+        // `**/` also matches zero segments, so `**/test` hits `test`.
+        if (glob[i + 2] === '/') {
+          i += 2;
+          re += '(?:.*/)?';
+        } else {
+          i += 1;
+          re += '.*';
+        }
+      } else {
+        re += '[^/]*';
+      }
+    } else if (c === '?') {
+      re += '[^/]';
+    } else {
+      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
 // A path is source if it has a source extension and is not a test file.
 function isSourcePath(p) {
   return SOURCE_EXTS.has(path.extname(p)) && !isTestFile(p);

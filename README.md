@@ -73,7 +73,34 @@ crap4js --exclude GLOB   Skip files whose project-relative path matches
 crap4js --threshold <n>  Override CRAP threshold (default: 8.0).
 crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;
                          the chosen value feeds the CRAP formula.
+crap4js --split-callbacks
+                         Measure named inner callbacks and React hook bodies
+                         (useCallback, useMemo, useEffect, handler properties)
+                         as separate Parent.child entries rather than summing
+                         them into the enclosing function.
+crap4js --explain        Print AST breakdown of complexity contributors for
+                         each reported function.
+crap4js --config <p>     Load per-path configuration from JSON file (default:
+                         auto-discovers crap4js.config.json or package.json#crap4js).
+crap4js --override <s...>
+                         Per-glob rule override, e.g.
+                         '**/*.tsx:threshold=15,metric=cognitive' or
+                         '**/i18n/**:gates.crap=false,gates.duplicates=false'.
+crap4js --baseline <p>   Fail only on regressions vs baseline JSON.
+crap4js --write-baseline <p>
+                         Write current metrics to baseline JSON.
+crap4js --ratchet-baseline <p>
+                         Check against baseline and tighten on improvement.
 crap4js --run-tests      Run the test+coverage suite before analyzing.
+crap4js diff-check [...] Diff-scoped quality gate ("Clean as You Code"):
+                         CRAP on touched functions, changed-lines coverage,
+                         clones touching changed lines, plus diff-scoped
+                         method-size, loc, and component-size gates.
+crap4js component-size [--max-complexity N] [--max-callbacks N] [--max-lines N]
+                       [--exclude GLOB]... [paths...]
+                         Fail React function components (PascalCase returning
+                         JSX) exceeding WMC complexity (40), inner callbacks +
+                         hooks (10), or body lines (200).
 crap4js profile [...]    Run instrumented tests and report per-function timing.
 crap4js file-naming [...]  Flag mechanical file names (generic/numeric stems).
 crap4js nesting [...]    Fail functions whose control-flow nesting exceeds 5.
@@ -97,7 +124,9 @@ crap4js scattered-constants [--min-files N] [--min-length N] [--min-value N]
 crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]
                    [--report percentage|clones] [--ignore-locals]
                    [--ignore-literals] [--ignore-identifiers]
-                   [--ignore-imports] [--skip-duplicate-files]
+                   [--ignore-properties] [--ignore-imports]
+                   [--ignore-types] [--ignore-data] [--pairwise]
+                   [--skip-duplicate-files]
                    [--exclude GLOB]... [--source PATH]... [paths...]
                    Flag duplicated token windows within/across files;
                    clones mode reports one violation per clone group.
@@ -1282,27 +1311,78 @@ const DEFAULT_MAX_MUTANTS = 500; // ignore:scattered-constants
 const ACCENT = guessColor(); // both markers above apply to this line
 ```
 
-## Complexity rules
+## How complexity is counted
 
-Base value `1`, then `+1` for each occurrence of:
+### Construct reference (Cyclomatic vs. Cognitive)
 
-| Construct                | Babel node type                              |
-|--------------------------|----------------------------------------------|
-| `if`                     | `IfStatement`                                |
-| `for`                    | `ForStatement`                               |
-| `for-in` / `for-of`      | `ForInStatement` / `ForOfStatement`          |
-| `while`                  | `WhileStatement`                             |
-| `do-while`               | `DoWhileStatement`                           |
-| `catch`                  | `CatchClause`                                |
-| `switch` case / `default`| `SwitchCase` (including default)             |
-| ternary                  | `ConditionalExpression`                      |
-| `&&` / `\|\|`            | `LogicalExpression`                          |
+| Construct | Counted (cyclomatic)? | Counted (cognitive)? | Babel node type |
+|---|---|---|---|
+| Base function entry | `+1` (starts at `1`) | `+0` (starts at `0`) | Function / method root |
+| `if`, `else if` | `+1` | `+1` (+ nesting for `if`; `else if` is flat) | `IfStatement` |
+| `else` | **no** | `+1` (flat) | `IfStatement.alternate` |
+| `for`, `for...in`, `for...of`, `while`, `do...while` | `+1` | `+1` + nesting | `For*Statement`, `WhileStatement`, `DoWhileStatement` |
+| `catch` | `+1` | `+1` + nesting | `CatchClause` |
+| `switch` `case` / `default` | `+1` per `case` and `default` | `+1` + nesting | `SwitchCase` |
+| `a ? b : c` (ternary) | `+1` | `+1` + nesting | `ConditionalExpression` |
+| `a && b`, `a \|\| b` (incl. JSX `cond && <X/>`) | `+1` per operator | `+1` per sequence of identical operators | `LogicalExpression` |
+| `a?.b` (optional chaining), `a ?? b` (nullish coalescing) | **no** | **no** | `OptionalMemberExpression`, `LogicalExpression` (`??`) |
+| Default parameter values (`fn(x = 1)`) | **no** | **no** | `AssignmentPattern` |
+| Nested `function f() {}` declaration | **not** added to parent (reported separately) | **not** added to parent (reported separately) | `FunctionDeclaration` |
+| Nested `const f = () => {}` / `const f = function() {}` | **not** added to parent (reported separately — no double count) | **not** added to parent (reported separately — no double count) | `VariableDeclarator` / `AssignmentExpression` / `ObjectProperty` |
+| `useCallback` / `useMemo` / `useEffect` / object handler (`onPress: () => {}`) | Default: added to parent; with `--split-callbacks`: reported as `Parent.child` and **not** added to parent | Default: deepens nesting +1 in parent; with `--split-callbacks`: reported as `Parent.child` and **not** added to parent | `ArrowFunctionExpression` / `FunctionExpression` |
+| Anonymous inline callback (`items.map(x => ...)`, `onPress={() => a && b()}`) | Added to parent | Deepens nesting `+1` in parent | `ArrowFunctionExpression` / `FunctionExpression` |
+| Class `constructor` | Excluded from complexity & CRAP | Excluded from complexity & CRAP | `ClassMethod` (`kind === 'constructor'`) |
 
-- Arrow / anonymous function-literal bodies count TOWARDS the enclosing
-  function (we descend into them when computing the parent's complexity).
-- Nested NAMED `FunctionDeclaration`s are reported as their own entries and
-  are NOT counted toward the enclosing function.
-- Class `constructor` methods are excluded.
+### Explainability (`--explain`)
+
+Pass `--explain` to `crap4js`, `crap4js complexity`, or `crap4js diff-check` to print every AST node that contributed to a function's complexity score, including attribution to inner arrows/callbacks:
+
+```
+src/ProfileScreen.tsx:6 ProfileScreen CC=10
+  +1 base
+  +1 :14 catch                    (in arrow onPress at :11)
+  +1 :22 ?:                       (in arrow renderItem at :19)
+  +1 :22 ?:                       (in arrow renderItem at :19)
+  +1 :23 &&                       (in arrow renderItem at :19)
+  +1 :29 ||                       (in arrow renderHeader at :27)
+  +1 :30 &&                       (in arrow renderHeader at :27)
+  +1 :30 &&                       (in arrow renderHeader at :27)
+  +1 :36 ?:
+  +1 :37 &&
+```
+
+### React Function Components (`--split-callbacks` and `component-size`)
+
+- **`--split-callbacks`** (available on `crap4js`, `crap4js complexity`, and `crap4js diff-check`) extracts named inner callbacks (`const x = () => {}`, `const x = useCallback(() => {}, deps)`, `const x = useMemo(() => {}, deps)`, `useEffect(() => {})` as `<Parent>.useEffect#1`, and object-property handlers like `onPress: () => {}`) into their own `Parent.child` entries and excludes them from the parent's complexity. Anonymous inline JSX lambdas (`onPress={() => a && b()}`) remain part of the parent render.
+- **`crap4js component-size`** (and the diff-scoped component-size gate in `diff-check`) guards against oversized React function components (PascalCase functions returning JSX) by checking:
+  - `--max-complexity N` (default `40`): WMC-style summed complexity of the component and all its inner callbacks;
+  - `--max-callbacks N` (default `10`): count of inner callbacks + React hook calls (`use*`);
+  - `--max-lines N` (default `200`): component body lines.
+
+### Per-path configuration (`crap4js.config.json` / `--override`)
+
+Configure per-glob thresholds, metrics, and gate toggles in `crap4js.config.json`, `"crap4js"` in `package.json`, `--config <path>`, or via repeatable `--override '<glob>:key=value,...'` flags (last matching override wins, ESLint-style):
+
+```json
+{
+  "threshold": 8,
+  "metric": "cyclomatic",
+  "overrides": [
+    { "files": ["**/*.tsx"], "metric": "cognitive", "threshold": 15, "maxLines": 800, "maxMethodLines": 60, "maxParams": 6 },
+    { "files": ["**/i18n/**"], "gates": { "crap": false, "duplicates": false } },
+    { "files": ["**/generated/**"], "gates": { "crap": false, "coverage": false, "duplicates": false } }
+  ]
+}
+```
+
+### `diff-check` ("Clean as You Code")
+
+`crap4js diff-check` runs a diff-scoped quality gate against `--base <ref>` (auto-detected from `GITHUB_BASE_REF`, `CI_MERGE_REQUEST_TARGET_BRANCH_NAME`, `origin/main`, `origin/master`, `main`, `master`, or `HEAD~1`):
+1. **CRAP on touched functions** (`--threshold`, `--metric cyclomatic|cognitive`, `--split-callbacks`, `--explain`).
+2. **Changed-lines statement coverage** (`--min-coverage`, default `80%`).
+3. **Duplicates touching changed lines** (`--exclude-duplicates <glob>`, `--ignore-types`, `--ignore-data`, `--new-duplicates-only`).
+4. **Diff-scoped `method-size`, `loc`, and `component-size`** on touched methods, files, and React components (`--no-method-size-gate`, `--no-loc-gate`, `--no-component-size-gate`).
+5. **Upstream ignore markers** (`// ignore:<gate>`, `// ignore-file:<gate>`, `// crap:ignore`, `// crap:ignore-file`) are honored across all `diff-check` gates.
 
 ## Cognitive complexity
 

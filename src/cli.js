@@ -147,6 +147,7 @@ import { runCollapsibleFlow } from './collapsibleFlow.js';
 import { runNonNullAssertion } from './nonNullAssertion.js';
 import { runLoc } from './loc.js';
 import { runMethodSize } from './methodSize.js';
+import { runComponentSize } from './componentSize.js';
 import { runPublicDocs } from './publicDocs.js';
 import { runTestCoverage } from './testCoverage.js';
 import { runComplexity } from './complexity.js';
@@ -154,196 +155,228 @@ import { parseProfileArgs, runProfile } from './profile.js';
 import { runMemory } from './memory.js';
 import { runSkill } from './skill.js';
 import { isMain } from './mainGuard.js';
-import { COGNITIVE } from './complexity.js';
-import { COVERAGE, DEFAULT_COVERAGE, EXCLUDE, THRESHOLD_FLAG } from './constants.js';
+import { loadConfig, resolvePathConfig } from './config.js';
+import {
+  COGNITIVE,
+  CONFIG_OPT,
+  COVERAGE,
+  CYCLOMATIC,
+  DEFAULT_COVERAGE,
+  EXCLUDE,
+  EXPLAIN_OPT,
+  METRIC_OPT,
+  OVERRIDE_OPT,
+  SPLIT_CALLBACKS_OPT,
+  THRESHOLD_FLAG,
+  THRESHOLD_OPT,
+} from './constants.js';
+import { formatExplanation } from './explain.js';
 
 const DEFAULT_THRESHOLD = 8.0;
-const METRICS = new Set(['cyclomatic', COGNITIVE]);
+const METRICS = new Set([CYCLOMATIC, COGNITIVE]);
 
+const USAGE_TEXT = [
+  'Usage:',
+  '  crap4js                  Analyze all .js/.jsx/.ts/.tsx/.mjs/.cjs files under src/',
+  '  crap4js --changed        Analyze git-changed source files under src/',
+  '  crap4js <path>...        Analyze explicit files / directories (expanded)',
+  '  crap4js --help           Print this help message',
+  '  crap4js --coverage <p>   Override coverage file (default: ' + DEFAULT_COVERAGE + ')',
+  '                           A missing, unparseable, or record-free coverage',
+  '                           file fails the run (exit 1): unit-test coverage',
+  '                           is required. Generate it with',
+  '                           `npx c8 --reporter=json node --test`',
+  '  crap4js --threshold <n>  Override CRAP threshold (default: ' + DEFAULT_THRESHOLD + ')',
+  '  crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;',
+  '                           the chosen value feeds the CRAP formula',
+  '  crap4js --split-callbacks  Measure named inner callbacks separately from parent',
+  '  crap4js --explain        Print AST constructs contributing to complexity',
+  '  crap4js --config <file>  Path to crap4js.config.json',
+  '  crap4js --override <sp>  Per-glob override (<glob>:threshold=15,metric=cognitive,...)',
+  '  crap4js --run-tests      Run the test+coverage suite before analyzing',
+  '  crap4js --coverage <p>   A path ending in .info parses as an lcov',
+  '                           tracefile instead of Istanbul JSON',
+  '  crap4js --diff-base REF  Analyze only the functions intersecting lines',
+  '                           added/changed vs git ref REF (renames use the',
+  '                           new path; explicit paths scope the diff;',
+  '                           mutually exclusive with --changed)',
+  '  crap4js --strict         Selected files with no coverage entry count as',
+  '                           0.0% covered instead of N/A, and explicit',
+  '                           paths must exist (exit 1 otherwise)',
+  '  crap4js --exclude GLOB   Skip files whose project-relative path matches',
+  '                           GLOB (repeatable)',
+  '  crap4js --baseline <f>   Ratchet: fail if any function\'s CRAP grew vs the baseline',
+  '                           or a function not in it exceeds --threshold',
+  '  crap4js --baseline <f> --update-baseline',
+  '                           Ratchet the baseline DOWN (never up); fails without writing on a regression',
+  '  crap4js --baseline <f> --write-baseline',
+  '                           Record per-function CRAP above --threshold as the baseline',
+  '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
+  '                           Run instrumented tests and report per-function timing',
+  '  crap4js file-naming [paths...]',
+  '                           Flag mechanical file names (generic/numeric stems)',
+  '  crap4js nesting [paths...]',
+  '                           Fail functions whose control-flow nesting exceeds 5',
+  '  crap4js class-size [paths...]',
+  '                           Fail classes with >25 methods or WMC >80',
+  '  crap4js component-size [--max-complexity N] [--max-callbacks N] [--max-lines N] [paths...]',
+  '                           Fail React function components exceeding size limits',
+  '  crap4js weight-of-class [paths...]',
+  '                           Fail classes whose public-instance field ratio exceeds 0.33',
+  '  crap4js unused-code [paths...]',
+  '                           Flag module-private declarations never referenced',
+  '  crap4js unused-files [--exclude GLOB]... [paths...]',
+  '                           Flag source files never imported by analyzed sources or tests',
+  '  crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]',
+  '                           Enforce architectural import boundaries',
+  '  crap4js magic-constants [paths...]',
+  '                           Flag hex colors outside constants and literals',
+  '                           repeated 3+ times per file.',
+  '  crap4js scattered-constants [--min-files N] [--min-length N]',
+  '                     [--min-value N] [--ignore VALUE]... [--exclude GLOB]...',
+  '                     [--aliases|--no-aliases] [paths...]',
+  '                           Flag literals whose value repeats across',
+  '                           distinct files: existing const declarations',
+  '                           regress immediately, scattered values need',
+  '                           --min-files files; private const _x = kY;',
+  '                           pure aliases are flagged (--no-aliases opts',
+  '                           out).',
+  '  crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]',
+  '                     [--report percentage|clones] [--ignore-locals]',
+  '                     [--ignore-literals] [--ignore-identifiers]',
+  '                     [--ignore-imports] [--ignore-types] [--ignore-data]',
+  '                     [--skip-duplicate-files]',
+  '                     [--exclude GLOB]... [--source PATH]... [paths...]',
+  '                           Flag duplicated token windows within/across',
+  '                           files; the ignore flags opt into renamed-clone',
+  '                           and literal masking, clones mode reports one',
+  '                           violation per clone group',
+  '  crap4js diff-check [--base REF] [--coverage FILE] [--min-coverage N] [--threshold N]',
+  '                     [--metric cyclomatic|cognitive] [--split-callbacks] [--explain]',
+  '                     [--min-tokens N] [--min-lines N] [--exclude GLOB]...',
+  '                     [--exclude-duplicates GLOB]... [--ignore-types] [--ignore-data]',
+  '                     [--new-duplicates-only] [--exact-clones] [--warn-only] [--github]',
+  '                     [--no-coverage-gate|--no-crap-gate|--no-duplicates-gate]',
+  '                     [--no-method-size-gate|--no-loc-gate|--no-component-size-gate]',
+  '                           Diff-scoped PR gate vs merge-base (default origin/develop): changed-lines',
+  '                           coverage >= N% (80), modified functions CRAP <= threshold (8), no duplicated',
+  '                           blocks touching changed lines, plus diff-scoped method-size/loc/component-size.',
+  '  crap4js test-assertions [paths...]',
+  '                           Flag test()/it() bodies with zero assertion calls',
+  '  crap4js inline-anon-types [--max-fields N] [paths...]',
+  '                           Flag inline anonymous type literals ({...}',
+  '                           / [...]) in function signature annotations,',
+  '                           incl. nested in type arguments; plain .js',
+  '                           has no type syntax, so it is a no-op there',
+  '  crap4js folder-structure [--dir GLOB]... [--max-loose-files N]',
+  '                      [--cap PATTERN:N]... [--exclude GLOB]...',
+  '                           Flag directories holding more than their',
+  '                           cap of loose (direct) source files; --cap',
+  '                           gives per-pattern caps (first pattern wins)',
+  '  crap4js mutation [--min-score N] [--max-survivors N]',
+  '                   [--timeout-seconds N] [--max-mutants N]',
+  '                   [--cache|--no-cache] [--test-args ARG]...',
+  '                   [--diff-base REF] [--scope-tests]',
+  '                   [--operators CAT]... [--exclude GLOB]... [paths...]',
+  '                           Mutate one operator/literal at a time and',
+  '                           re-run the test suite (node --test) per',
+  '                           mutant; covered sites only, survivors flagged.',
+  '                           Killed mutants of unchanged methods are',
+  '                           replayed from .crap-mutation-cache.json',
+  '                           (--no-cache disables); --test-args scopes',
+  '                           the per-mutant suite; --diff-base executes',
+  '                           only the mutants of methods changed vs REF;',
+  '                           --scope-tests narrows each mutant to its',
+  "                           file's derived test files (scoped kills cache",
+  '                           as kills; survivors are re-confirmed against',
+  '                           the full suite)',
+  '  crap4js reorder [--dry-run] [paths...]',
+  '                           Rewrite class members into the canonical',
+  '                           order (static fields, instance fields,',
+  '                           constructor, static methods, getters/',
+  '                           setters, public methods, private #methods;',
+  '                           same-kind order kept). Comments above a',
+  '                           member move with it. --dry-run lists the',
+  '                           files that would change and exits 2.',
+  '  crap4js memory [--top N] [--format console|json] [--badge PATH]',
+  '                  [--badge-threshold MB] [paths...]',
+  '                           Run the test suite under node --trace-gc (one',
+  '                           file per sequential child run) and report',
+  '                           per-test allocation churn and heap growth.',
+  '                           --badge writes a shields-style churn SVG.',
+  '                           Informational — always exits 0.',
+  '  crap4js string-hazards [--severity warning|error] [paths...]',
+  '                           Flag string literals whose escaping or',
+  '                           pattern usage contradicts the intent:',
+  '                           escaped template interpolations (\\${name}',
+  '                           with sibling ${name} evidence), RegExp',
+  '                           sources with an escaped anchor (/...\\$/)',
+  '                           and ^/$ anchors in STRING patterns of',
+  '                           replace/replaceAll/split. Warning by',
+  '                           default — findings exit 0; --severity',
+  '                           error exits 2.',
+  '  crap4js identical-branches [--severity warning|error] [paths...]',
+  '                           Flag the copy-paste-edit bug family —',
+  '                           duplicate conditions/branch bodies in one',
+  '                           if/else-if chain, duplicate operands in',
+  '                           one &&/|| chain (absorption included),',
+  '                           identical ternary branches, duplicate',
+  '                           positional call arguments, duplicate',
+  '                           catch/finally bodies — all compared by',
+  '                           canonical form. Warning by default —',
+  '                           findings exit 0; --severity error exits 2.',
+  '  crap4js collapsible-flow [--severity warning|error] [paths...]',
+  '                           Flag control-flow nesting a mechanical',
+  '                           rewrite can flatten: nested if without',
+  '                           else merging into one && condition,',
+  '                           redundant else after an always-exiting',
+  '                           then branch, and else-if chains after a',
+  '                           terminal then (hint only). Warning by',
+  '                           default — findings exit 0; --severity',
+  '                           error exits 2.',
+  '  crap4js non-null-assertion [--severity warning|error] [paths...]',
+  '                           Flag every TS non-null assertion (x!,',
+  "                           obj['k']!, chains) in .ts/.tsx files —",
+  '                           a bang crashes on null; ?. / ?? carry',
+  '                           the same intent with a readable',
+  '                           check. Warning by default — findings',
+  '                           exit 0; --severity error exits 2.',
+  '  crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]',
+  '                           Fail files longer than N lines (default',
+  '                           800); --exclude drops files from the',
+  '                           check entirely.',
+  '  crap4js method-size [--max-lines N] [--max-params N] [paths...]',
+  '                           Fail methods longer than N body lines',
+  '                           (default 60) or with more than N params',
+  '                           (default 6); constructors are checked',
+  '                           for the parameter count only.',
+  '  crap4js public-docs [--exclude GLOB]... [paths...]',
+  '                           Fail exported functions/classes and the',
+  '                           public methods of exported classes',
+  '                           lacking an adjacent /** */ JSDoc block.',
+  '  crap4js test-coverage [--min-percent F] [--coverage PATH]',
+  '                      [--exclude GLOB]... [paths...]',
+  '                           Fail when the total statement coverage',
+  '                           of the selection (from the CRAP coverage',
+  '                           input, Istanbul JSON or lcov .info) is',
+  '                           below F% (default 80.0); a missing or',
+  '                           empty coverage input fails (exit 1).',
+  '  crap4js complexity [--metric cyclomatic|cognitive] [--max N] [paths...]',
+  '                           Fail functions whose complexity exceeds',
+  '                           N (default 10): the cyclomatic path',
+  '                           count (CC) by default, or the cognitive',
+  '                           score with --metric cognitive.',
+  '  crap4js skill            Print the crap4js profiling skill for AI agents',
+  '',
+].join('\n');
+
+/**
+ * Return the CLI usage help string.
+ *
+ * @returns {string}
+ */
 function usage() {
-  return [
-    'Usage:',
-    '  crap4js                  Analyze all .js/.jsx/.ts/.tsx/.mjs/.cjs files under src/',
-    '  crap4js --changed        Analyze git-changed source files under src/',
-    '  crap4js <path>...        Analyze explicit files / directories (expanded)',
-    '  crap4js --help           Print this help message',
-    '  crap4js --coverage <p>   Override coverage file (default: ' + DEFAULT_COVERAGE + ')',
-    '                           A missing, unparseable, or record-free coverage',
-    '                           file fails the run (exit 1): unit-test coverage',
-    '                           is required. Generate it with',
-    '                           `npx c8 --reporter=json node --test`',
-    '  crap4js --threshold <n>  Override CRAP threshold (default: ' + DEFAULT_THRESHOLD + ')',
-    '  crap4js --metric <m>     Complexity metric: cyclomatic (default) or cognitive;',
-    '                           the chosen value feeds the CRAP formula',
-    '  crap4js --run-tests      Run the test+coverage suite before analyzing',
-    '  crap4js --coverage <p>   A path ending in .info parses as an lcov',
-    '                           tracefile instead of Istanbul JSON',
-    '  crap4js --diff-base REF  Analyze only the functions intersecting lines',
-    '                           added/changed vs git ref REF (renames use the',
-    '                           new path; explicit paths scope the diff;',
-    '                           mutually exclusive with --changed)',
-    '  crap4js --strict         Selected files with no coverage entry count as',
-    '                           0.0% covered instead of N/A, and explicit',
-    '                           paths must exist (exit 1 otherwise)',
-    '  crap4js --exclude GLOB   Skip files whose project-relative path matches',
-    '                           GLOB (repeatable)',
-    '  crap4js --baseline <f>   Ratchet: fail if any function\'s CRAP grew vs the baseline',
-    '                           or a function not in it exceeds --threshold',
-    '  crap4js --baseline <f> --update-baseline',
-    '                           Ratchet the baseline DOWN (never up); fails without writing on a regression',
-    '  crap4js --baseline <f> --write-baseline',
-    '                           Record per-function CRAP above --threshold as the baseline',
-    '  crap4js profile [--name <p>] [--threshold <ms>] [--top <N>] [paths...]',
-    '                           Run instrumented tests and report per-function timing',
-    '  crap4js file-naming [paths...]',
-    '                           Flag mechanical file names (generic/numeric stems)',
-    '  crap4js nesting [paths...]',
-    '                           Fail functions whose control-flow nesting exceeds 5',
-    '  crap4js class-size [paths...]',
-    '                           Fail classes with >25 methods or WMC >80',
-    '  crap4js weight-of-class [paths...]',
-    '                           Fail classes whose public-instance field ratio exceeds 0.33',
-    '  crap4js unused-code [paths...]',
-    '                           Flag module-private declarations never referenced',
-    '  crap4js unused-files [--exclude GLOB]... [paths...]',
-    '                           Flag source files never imported by analyzed sources or tests',
-    '  crap4js banned-imports [--from GLOB --forbid GLOB --message MSG]... [paths...]',
-    '                           Enforce architectural import boundaries',
-    '  crap4js magic-constants [paths...]',
-    '                           Flag hex colors outside constants and literals',
-    '                           repeated 3+ times per file.',
-    '  crap4js scattered-constants [--min-files N] [--min-length N]',
-    '                     [--min-value N] [--ignore VALUE]... [--exclude GLOB]...',
-    '                     [--aliases|--no-aliases] [paths...]',
-    '                           Flag literals whose value repeats across',
-    '                           distinct files: existing const declarations',
-    '                           regress immediately, scattered values need',
-    '                           --min-files files; private const _x = kY;',
-    '                           pure aliases are flagged (--no-aliases opts',
-    '                           out).',
-    '  crap4js duplicates [--threshold N] [--min-tokens N] [--min-lines N]',
-    '                     [--report percentage|clones] [--ignore-locals]',
-    '                     [--ignore-literals] [--ignore-identifiers]',
-    '                     [--ignore-imports] [--skip-duplicate-files]',
-    '                     [--exclude GLOB]... [--source PATH]... [paths...]',
-    '                           Flag duplicated token windows within/across',
-    '                           files; the ignore flags opt into renamed-clone',
-    '                           and literal masking, clones mode reports one',
-    '                           violation per clone group',
-    '  crap4js diff-check [--base REF] [--coverage FILE] [--min-coverage N] [--threshold N]',
-    '                     [--min-tokens N] [--min-lines N] [--exclude GLOB]... [--exact-clones]',
-    '                     [--warn-only] [--github] [--no-coverage-gate|--no-crap-gate|--no-duplicates-gate]',
-    '                           Diff-scoped PR gate vs merge-base (default origin/develop): changed-lines',
-    '                           coverage >= N% (80), modified functions CRAP <= threshold (8), no duplicated',
-    '                           blocks touching changed lines. Stores nothing; fails closed on tool errors',
-    '  crap4js test-assertions [paths...]',
-    '                           Flag test()/it() bodies with zero assertion calls',
-    '  crap4js inline-anon-types [--max-fields N] [paths...]',
-    '                           Flag inline anonymous type literals ({...}',
-    '                           / [...]) in function signature annotations,',
-    '                           incl. nested in type arguments; plain .js',
-    '                           has no type syntax, so it is a no-op there',
-    '  crap4js folder-structure [--dir GLOB]... [--max-loose-files N]',
-    '                      [--cap PATTERN:N]... [--exclude GLOB]...',
-    '                           Flag directories holding more than their',
-    '                           cap of loose (direct) source files; --cap',
-    '                           gives per-pattern caps (first pattern wins)',
-    '  crap4js mutation [--min-score N] [--max-survivors N]',
-    '                   [--timeout-seconds N] [--max-mutants N]',
-    '                   [--cache|--no-cache] [--test-args ARG]...',
-    '                   [--diff-base REF] [--scope-tests]',
-    '                   [--operators CAT]... [--exclude GLOB]... [paths...]',
-    '                           Mutate one operator/literal at a time and',
-    '                           re-run the test suite (node --test) per',
-    '                           mutant; covered sites only, survivors flagged.',
-    '                           Killed mutants of unchanged methods are',
-    '                           replayed from .crap-mutation-cache.json',
-    '                           (--no-cache disables); --test-args scopes',
-    '                           the per-mutant suite; --diff-base executes',
-    '                           only the mutants of methods changed vs REF;',
-    '                           --scope-tests narrows each mutant to its',
-    "                           file's derived test files (scoped kills cache",
-    '                           as kills; survivors are re-confirmed against',
-    '                           the full suite)',
-    '  crap4js reorder [--dry-run] [paths...]',
-    '                           Rewrite class members into the canonical',
-    '                           order (static fields, instance fields,',
-    '                           constructor, static methods, getters/',
-    '                           setters, public methods, private #methods;',
-    '                           same-kind order kept). Comments above a',
-    '                           member move with it. --dry-run lists the',
-    '                           files that would change and exits 2.',
-    '  crap4js memory [--top N] [--format console|json] [--badge PATH]',
-    '                  [--badge-threshold MB] [paths...]',
-    '                           Run the test suite under node --trace-gc (one',
-    '                           file per sequential child run) and report',
-    '                           per-test allocation churn and heap growth.',
-    '                           --badge writes a shields-style churn SVG.',
-    '                           Informational — always exits 0.',
-    '  crap4js string-hazards [--severity warning|error] [paths...]',
-    '                           Flag string literals whose escaping or',
-    '                           pattern usage contradicts the intent:',
-    '                           escaped template interpolations (\\${name}',
-    '                           with sibling ${name} evidence), RegExp',
-    '                           sources with an escaped anchor (/...\\$/)',
-    '                           and ^/$ anchors in STRING patterns of',
-    '                           replace/replaceAll/split. Warning by',
-    '                           default — findings exit 0; --severity',
-    '                           error exits 2.',
-    '  crap4js identical-branches [--severity warning|error] [paths...]',
-    '                           Flag the copy-paste-edit bug family —',
-    '                           duplicate conditions/branch bodies in one',
-    '                           if/else-if chain, duplicate operands in',
-    '                           one &&/|| chain (absorption included),',
-    '                           identical ternary branches, duplicate',
-    '                           positional call arguments, duplicate',
-    '                           catch/finally bodies — all compared by',
-    '                           canonical form. Warning by default —',
-    '                           findings exit 0; --severity error exits 2.',
-    '  crap4js collapsible-flow [--severity warning|error] [paths...]',
-    '                           Flag control-flow nesting a mechanical',
-    '                           rewrite can flatten: nested if without',
-    '                           else merging into one && condition,',
-    '                           redundant else after an always-exiting',
-    '                           then branch, and else-if chains after a',
-    '                           terminal then (hint only). Warning by',
-    '                           default — findings exit 0; --severity',
-    '                           error exits 2.',
-    '  crap4js non-null-assertion [--severity warning|error] [paths...]',
-    '                           Flag every TS non-null assertion (x!,',
-    "                           obj['k']!, chains) in .ts/.tsx files —",
-    '                           a bang crashes on null; ?. / ?? carry',
-    '                           the same intent with a readable',
-    '                           check. Warning by default — findings',
-    '                           exit 0; --severity error exits 2.',
-    '  crap4js loc [--max-lines N] [--exclude GLOB]... [paths...]',
-    '                           Fail files longer than N lines (default',
-    '                           800); --exclude drops files from the',
-    '                           check entirely.',
-    '  crap4js method-size [--max-lines N] [--max-params N] [paths...]',
-    '                           Fail methods longer than N body lines',
-    '                           (default 60) or with more than N params',
-    '                           (default 6); constructors are checked',
-    '                           for the parameter count only.',
-    '  crap4js public-docs [--exclude GLOB]... [paths...]',
-    '                           Fail exported functions/classes and the',
-    '                           public methods of exported classes',
-    '                           lacking an adjacent /** */ JSDoc block.',
-    '  crap4js test-coverage [--min-percent F] [--coverage PATH]',
-    '                      [--exclude GLOB]... [paths...]',
-    '                           Fail when the total statement coverage',
-    '                           of the selection (from the CRAP coverage',
-    '                           input, Istanbul JSON or lcov .info) is',
-    '                           below F% (default 80.0); a missing or',
-    '                           empty coverage input fails (exit 1).',
-    '  crap4js complexity [--metric cyclomatic|cognitive] [--max N] [paths...]',
-    '                           Fail functions whose complexity exceeds',
-    '                           N (default 10): the cyclomatic path',
-    '                           count (CC) by default, or the cognitive',
-    '                           score with --metric cognitive.',
-    '  crap4js skill            Print the crap4js profiling skill for AI agents',
-    '',
-  ].join('\n');
+  return USAGE_TEXT;
 }
 
 // Subcommand dispatch on the FIRST argument only. Each command parses its
@@ -373,6 +406,7 @@ const SUBCOMMANDS = {
   'non-null-assertion': (args, ctx) => runNonNullAssertion(args, ctx),
   loc: (args, ctx) => runLoc(args, ctx),
   'method-size': (args, ctx) => runMethodSize(args, ctx),
+  'component-size': (args, ctx) => runComponentSize(args, ctx),
   'public-docs': (args, ctx) => runPublicDocs(args, ctx),
   'test-coverage': (args, ctx) => runTestCoverage(args, ctx),
   complexity: (args, ctx) => runComplexity(args, ctx),
@@ -388,7 +422,20 @@ const SIMPLE_FLAGS = {
   '--strict': 'strict',
   '--write-baseline': 'writeBaseline',
   '--update-baseline': 'updateBaseline',
+  '--split-callbacks': SPLIT_CALLBACKS_OPT,
+  '--explain': EXPLAIN_OPT,
 };
+
+const VALUE_FLAGS = [
+  ['--coverage', COVERAGE, false],
+  [THRESHOLD_FLAG, THRESHOLD_OPT, false],
+  ['--metric', METRIC_OPT, false],
+  ['--diff-base', 'diffBase', false],
+  ['--exclude', EXCLUDE, true],
+  ['--baseline', 'baseline', false],
+  ['--config', CONFIG_OPT, false],
+  ['--override', OVERRIDE_OPT, true],
+];
 
 function parseArgs(argv) {
   const opts = newOpts();
@@ -416,6 +463,10 @@ function newOpts() {
     baseline: undefined,
     writeBaseline: false,
     updateBaseline: false,
+    splitCallbacks: false,
+    explain: false,
+    config: undefined,
+    override: [],
   };
 }
 
@@ -426,13 +477,9 @@ function applyArg(opts, argv, i) {
     opts[simple] = true;
     return i;
   }
-  if (isFlag(a, '--coverage')) return takeValue(opts, COVERAGE, a, argv, i);
-  if (isFlag(a, THRESHOLD_FLAG)) return takeValue(opts, 'threshold', a, argv, i);
-  if (isFlag(a, '--metric')) return takeValue(opts, 'metric', a, argv, i);
-  if (isFlag(a, '--diff-base')) return takeValue(opts, 'diffBase', a, argv, i);
-  if (isFlag(a, '--exclude')) return takeValue(opts, EXCLUDE, a, argv, i, true);
-  if (isFlag(a, '--baseline')) return takeValue(opts, 'baseline', a, argv, i);
-  if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
+  const matched = VALUE_FLAGS.find(([flag]) => isFlag(a, flag));
+  if (matched) return takeValue(opts, matched[1], a, argv, i, matched[2]);
+  if (a.startsWith('-')) throw new Error(`Unknown flag: ${a}`);
   opts.paths.push(a);
   return i;
 }
@@ -486,17 +533,9 @@ function parseThreshold(threshold) {
 }
 
 function parseMetric(metric) {
-  if (metric === undefined) return 'cyclomatic';
+  if (metric === undefined) return CYCLOMATIC;
   if (!METRICS.has(metric)) throw new Error(`Invalid metric: ${metric}`);
   return metric;
-}
-
-function maxCrap(metrics) {
-  let max = 0;
-  for (const m of metrics) {
-    if (m.crapScore != null && m.crapScore > max) max = m.crapScore;
-  }
-  return max;
 }
 
 const FAIL = Symbol('fail');
@@ -524,7 +563,12 @@ function main(argv, streams = {}) {
 function dispatchSubcommand(argv, ctx) {
   const run = SUBCOMMANDS[argv[0]];
   if (!run) return null;
-  const code = tryStep(ctx, () => run(argv.slice(1), ctx));
+  const subArgs = argv.slice(1);
+  if (argv[0] !== 'diff-check' && (subArgs.includes('--help') || subArgs.includes('-h'))) {
+    ctx.out.write(usage());
+    return 0;
+  }
+  const code = tryStep(ctx, () => run(subArgs, ctx));
   return code === FAIL ? 1 : code;
 }
 
@@ -533,11 +577,35 @@ function runWithOpts(opts, ctx) {
   const inputs = resolveRunInputs(opts, ctx);
   if (inputs === null) return 1;
   if (inputs.files.length === 0) return 0;
-  const coveragePath = resolveCoveragePath(opts, ctx.cwd);
-  const result = tryStep(ctx, () =>
-    analyze({ filePaths: inputs.files, coveragePath, projectRoot: ctx.cwd, metric: opts.metricValue, strict: opts.strict, diffLines: inputs.diffLines }),
-  );
+  const result = tryStep(ctx, () => executeAnalysis(opts, inputs, ctx));
   if (result === FAIL) return 1;
+  return renderAndVerdict(result, opts, inputs, ctx);
+}
+
+function executeAnalysis(opts, inputs, ctx) {
+  const config = loadConfig(ctx.cwd, { configPath: opts.config, overrides: opts.override });
+  const topCfg = resolvePathConfig(config, '', {
+    explicit_threshold: opts.threshold !== undefined,
+    explicit_metric: opts.metric !== undefined,
+    threshold: opts.thresholdValue,
+    metric: opts.metricValue,
+  });
+  opts.thresholdValue = topCfg.threshold ?? opts.thresholdValue;
+  opts.metricValue = topCfg.metric ?? opts.metricValue;
+  return analyze({
+    filePaths: inputs.files,
+    coveragePath: resolveCoveragePath(opts, ctx.cwd),
+    projectRoot: ctx.cwd,
+    metric: opts.metricValue,
+    strict: opts.strict,
+    diffLines: inputs.diffLines,
+    splitCallbacks: opts.splitCallbacks,
+    explain: opts.explain,
+    config,
+  });
+}
+
+function renderAndVerdict(result, opts, inputs, ctx) {
   if (isEmptyDiffSelection(inputs.diffLines, result.metrics)) {
     // The diff touched no function body in the selection: nothing to analyze.
     ctx.out.write('No JavaScript files to analyze.\n');
@@ -550,8 +618,17 @@ function runWithOpts(opts, ctx) {
       metric: opts.metricValue,
     }),
   );
+  if (opts.explain) writeExplanations(result.metrics, opts.metricValue, ctx);
   if (opts.baseline) return baselineVerdict(result.metrics, opts, ctx);
   return reportVerdict(result.metrics, opts.thresholdValue, ctx);
+}
+
+function writeExplanations(metrics, defaultMetric, ctx) {
+  for (const m of metrics) {
+    if (m.breakdown) {
+      ctx.out.write(formatExplanation(m.file, m.methodName, m.startLine, m.metric ?? defaultMetric, m.complexity, m.breakdown));
+    }
+  }
 }
 
 // File selection plus the --diff-base changed-line map. Writes the empty
@@ -665,12 +742,14 @@ function resolveFiles(opts, cwd) {
 }
 
 function reportVerdict(metrics, threshold, ctx) {
-  const max = maxCrap(metrics);
-  if (max > threshold) {
-    ctx.err.write(
-      `CRAP threshold exceeded: ${max.toFixed(1)} > ${threshold.toFixed(1)}\n`,
-    );
-    return 2;
+  for (const m of metrics) {
+    const limit = m.threshold ?? threshold;
+    if (m.crapScore != null && m.crapScore > limit) {
+      ctx.err.write(
+        `CRAP threshold exceeded: ${m.crapScore.toFixed(1)} > ${limit.toFixed(1)}\n`,
+      );
+      return 2;
+    }
   }
   return 0;
 }

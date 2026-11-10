@@ -89,6 +89,8 @@ export function namingSummary({ violations, checked }) {
  * path + message) and a summary. Returns exit code 2 iff violations exist.
  */
 export function runFileNaming(paths, ctx) {
+  const flag = paths.find((a) => a.startsWith('-'));
+  if (flag) throw new Error(`unknown flag: ${flag}`);
   const files = namingFiles(paths, ctx.cwd);
   if (files.length === 0) {
     ctx.out.write('No source files to check.\n');

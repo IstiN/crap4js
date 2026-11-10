@@ -190,7 +190,7 @@ export function testAssertionsSummary({ violations, checked }) {
  * Returns exit code 2 iff violations exist.
  */
 export function runTestAssertions(argv, ctx) {
-  const flag = argv.find((a) => a.startsWith('--'));
+  const flag = argv.find((a) => a.startsWith('-'));
   if (flag) throw new Error(`unknown flag: ${flag}`);
   return runCheck(
     ctx,

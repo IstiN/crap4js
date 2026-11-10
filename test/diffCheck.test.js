@@ -270,3 +270,106 @@ test('runDiffCheck e2e: fails closed on missing coverage and unknown base', () =
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('runDiffCheck: --help prints usage and exits 0; unknown flag throws usage error (Issue #5)', () => {
+  const root = repo();
+  try {
+    const out = [];
+    const code = runDiffCheck(['--help'], { cwd: root, out: { write: (s) => out.push(s) } });
+    assert.equal(code, 0);
+    assert.match(out.join(''), /Usage: crap4js diff-check/);
+    assert.throws(() => parseDiffCheckArgs(['--treshold', '8']), /unknown flag: --treshold/);
+    assert.throws(() => parseDiffCheckArgs(['--metric', 'invalid']), /Invalid --metric/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runDiffCheck e2e: --metric cognitive, --explain, --github, and ignore markers (Issues #2, #3, #4)', () => {
+  const root = repo();
+  try {
+    write(root, 'src/cog.js', complexFn('cogFn'));
+    coverageJson(root, 'src/cog.js', { 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0 });
+    const r = run(root, ['--no-duplicates-gate', '--no-coverage-gate', '--metric', 'cognitive', '--explain', '--github']);
+    assert.equal(r.code, 2);
+    assert.match(r.text, /\[crap\] src\/cog\.js:1: cogFn: CRAP 30\.0 > 8 \(cognitive 5, coverage 0%\)/);
+    assert.match(r.text, /::error file=src\/cog\.js,line=1,title=crap::/);
+    assert.match(r.text, /src\/cog\.js:1 cogFn cognitive=5/);
+    assert.match(r.text, /\+1 :2 if/);
+
+    // Suppress via // ignore-file:crap
+    write(root, 'src/cog.js', '// ignore-file:crap\n' + complexFn('cogFn'));
+    const suppressed = run(root, ['--no-duplicates-gate', '--no-coverage-gate', '--metric', 'cognitive']);
+    assert.equal(suppressed.code, 0, suppressed.text);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runDiffCheck e2e: --exclude-duplicates, --ignore-data, and --new-duplicates-only (Issue #3)', () => {
+  const root = repo();
+  try {
+    // Commit pre-existing duplicate at base (`main`)
+    write(root, 'src/dupA.js', complexFn('dupOne'));
+    write(root, 'src/dupB.js', complexFn('dupTwo'));
+    sh(root, 'add', '-A');
+    sh(root, 'commit', '-q', '-m', 'pre-existing duplicate');
+    sh(root, 'branch', '-f', 'main', 'HEAD');
+
+    // Touch a line INSIDE dupOne without changing its normalized clone structure (literal masked)
+    write(root, 'src/dupA.js', complexFn('dupOne').replace('return b * 2;', 'return b * 3;'));
+    const strictRes = run(root, ['--no-coverage-gate', '--no-crap-gate']);
+    assert.equal(strictRes.code, 2, 'strict default flags touched pre-existing duplicate');
+
+    const newOnlyRes = run(root, ['--no-coverage-gate', '--no-crap-gate', '--new-duplicates-only']);
+    assert.equal(newOnlyRes.code, 0, 'new-duplicates-only ignores pre-existing duplicate from base');
+
+    const exclDupRes = run(root, ['--no-coverage-gate', '--no-crap-gate', '--exclude-duplicates', 'src/dupA.js']);
+    assert.equal(exclDupRes.code, 0, 'exclude-duplicates skips file from duplication gate');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('runDiffCheck e2e: diff-scoped method-size, loc, and component-size gates (Issues #1, #6)', () => {
+  const root = repo();
+  try {
+    const bigComponent = [
+      'export function HugeCard(a, b, c, d, e, f, g) {',
+      '  const h1 = () => (a ? 1 : 0);',
+      '  const h2 = () => (b ? 1 : 0);',
+      '  return <div>{h1() + h2()}</div>;',
+      '}',
+    ].join('\n') + '\n';
+    write(root, 'src/HugeCard.tsx', bigComponent);
+    const r = run(root, [
+      '--no-coverage-gate',
+      '--no-crap-gate',
+      '--no-duplicates-gate',
+      '--max-params', '4',
+      '--max-lines', '3',
+      '--max-callbacks', '1',
+    ]);
+    assert.equal(r.code, 2);
+    assert.match(r.text, /\[method-size\] src\/HugeCard\.tsx:1: HugeCard has 7 params > max 4/);
+    assert.match(r.text, /\[loc\] src\/HugeCard\.tsx:1: 5 lines > max 3/);
+    assert.match(r.text, /\[component-size\] src\/HugeCard\.tsx:1: HugeCard has 2 callbacks\/hooks > max 1/);
+
+    // Disable the new gates with --no-*-gate flags
+    const off = run(root, [
+      '--no-coverage-gate',
+      '--no-crap-gate',
+      '--no-duplicates-gate',
+      '--no-method-size-gate',
+      '--no-loc-gate',
+      '--no-component-size-gate',
+      '--max-params', '4',
+      '--max-lines', '3',
+      '--max-callbacks', '1',
+    ]);
+    assert.equal(off.code, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+

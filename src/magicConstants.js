@@ -151,7 +151,7 @@ export function magicConstantsSummary({ violations, checked }) {
  * Returns exit code 2 iff violations exist.
  */
 export function runMagicConstants(argv, ctx) {
-  const flag = argv.find((a) => a.startsWith('--'));
+  const flag = argv.find((a) => a.startsWith('-'));
   if (flag) throw new Error(`unknown flag: ${flag}`);
   return runCheck(
     ctx,

@@ -33,26 +33,34 @@ import path from 'node:path';
 import { UTF8, expandPaths, gateFiles, isAnySourceFile, isTestPath, toRelPath } from './files.js';
 import { globToRegExp } from './bannedImports.js';
 import { parseTokenized, SKIP_KEYS, tokenizeSource } from './complexity.js';
-import { EXCLUDE, STRING, THRESHOLD_FLAG } from './constants.js';
 import {
   ARROW_FUNCTION_EXPRESSION,
   CALL,
   CLASS_METHOD,
   CLASS_PRIVATE_METHOD,
+  DUPLICATES_GATE,
+  EXCLUDE,
+  EXPORT_DEFAULT_DECLARATION,
   EXPORT_NAMED_DECLARATION,
   FUNCTION_DECLARATION,
   FUNCTION_EXPRESSION,
   IDENT,
   IMPORT_DECLARATION,
-} from './complexity.js';
+  MEMBER,
+  STRING,
+  THRESHOLD_FLAG,
+  THRESHOLD_OPT,
+  VARIABLE_DECLARATOR,
+} from './constants.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
+import { cloneRecord, extraSkipRanges, pairGroups } from './duplicateFilters.js';
 
 const DEFAULT_THRESHOLD = 1;
 const DEFAULT_MIN_TOKENS = 50;
 const DEFAULT_MIN_LINES = 5;
 
 const VALUE_FLAGS = {
-  [THRESHOLD_FLAG]: 'threshold',
+  [THRESHOLD_FLAG]: THRESHOLD_OPT,
   '--min-tokens': 'minTokens',
   '--min-lines': 'minLines',
   '--report': 'report',
@@ -72,6 +80,8 @@ const BOOLEAN_FLAGS = {
   '--ignore-imports': 'ignoreImports',
   '--skip-duplicate-files': 'skipDuplicateFiles',
   '--ignore-properties': 'ignoreProperties',
+  '--ignore-types': 'ignoreTypes',
+  '--ignore-data': 'ignoreData',
   '--pairwise': 'pairwise',
 };
 
@@ -118,17 +128,18 @@ export function runDuplicates(argv, ctx) {
     files,
     (fs, root) => duplicatesViolations(fs, root, opts),
     (result) => duplicatesSummary(result, opts),
-    'duplicates',
+    DUPLICATES_GATE,
   );
 }
 
-// The duplication scan set: the standard gate selection (explicit paths or
-// the src/ walk) unioned with every --source path — files with a source
-// extension taken directly, directories walked recursively, missing paths
-// skipped silently (commit dc64e9c). Test files and test directories (the
-// port's standard exclusion, upstream's default test glob) and --exclude
-// globs — matched against project-relative POSIX paths — are filtered from
-// the union; the result is sorted for deterministic scans.
+/**
+ * The duplication scan set: standard gate selection unioned with `--source`
+ * paths, minus test paths and `--exclude` globs.
+ *
+ * @param {object} opts
+ * @param {string} projectRoot
+ * @returns {string[]}
+ */
 export function scanSet(opts, projectRoot) {
   const files = new Set(gateFiles(opts.paths, projectRoot));
   for (const f of expandPaths(opts.source, projectRoot, isAnySourceFile)) {
@@ -195,13 +206,16 @@ const MASKING_KEYS = [
   'ignoreImports',
   'skipDuplicateFiles',
   'ignoreProperties',
+  'ignoreTypes',
+  'ignoreData',
 ];
 
 function tokenizeFiles(files, projectRoot, opts) {
   const masked = MASKING_KEYS.some((key) => opts[key]);
   const bags = [];
   for (const file of files) {
-    const source = readFileSync(file, UTF8);
+    const source = opts.readSource ? opts.readSource(file) : readFileSync(file, UTF8);
+    if (source == null) continue;
     const ext = path.extname(file);
     const tokens = (masked
       ? normalizedTokens(source, ext, opts)
@@ -270,7 +284,7 @@ function isNode(value) {
 function childNodes(node) {
   const children = [];
   for (const key in node) {
-    if (SKIP_KEYS.has(key) || key === 'type') continue;
+    if (SKIP_KEYS.has(key)) continue;
     const value = node[key];
     if (Array.isArray(value)) {
       for (const child of value) if (isNode(child)) children.push(child);
@@ -333,7 +347,7 @@ function collectFunctionLocals(node, root, names) {
 // purpose (upstream keeps no inner-scope shadow tracking).
 function collectScopeNames(node, root, names) {
   if (FUNCTION_TYPES.has(node.type)) return collectFunctionLocals(node, root, names);
-  if (node.type === 'VariableDeclarator') return bindings(node.id, names);
+  if (node.type === VARIABLE_DECLARATOR) return bindings(node.id, names);
   if (node.type === 'CatchClause') return bindings(node.param, names);
   if (TYPE_PARAM_TYPES.has(node.type)) addTypeParam(node, names);
 }
@@ -453,9 +467,10 @@ function normalizedTokens(source, ext, opts) {
 
 // The AST-derived masking inputs, built only for the knobs that need them.
 function maskingContext(program, opts) {
+  const imports = opts.ignoreImports ? importSkipRanges(program) : [];
   return {
     scopes: opts.ignoreLocals ? buildScopes(program) : [],
-    ranges: opts.ignoreImports ? importSkipRanges(program) : [],
+    ranges: [...imports, ...extraSkipRanges(program, opts)],
     props: opts.ignoreProperties ? propertyStarts(program) : new Set(),
   };
 }
@@ -493,7 +508,7 @@ function propertyStarts(program) {
   return starts;
 }
 
-const MEMBER_TYPES = new Set(['MemberExpression', 'OptionalMemberExpression']);
+const MEMBER_TYPES = new Set([MEMBER, 'OptionalMemberExpression']);
 
 // Token [start, end) ranges excluded under --ignore-imports: import/export
 // directives — the JS analog of upstream's import/export/part — plus
@@ -509,15 +524,12 @@ function importSkipRanges(program) {
       return;
     }
     if (node.type === EXPORT_NAMED_DECLARATION) {
-      // babel never attaches `source` when `declaration` is present (the
-      // two are mutually exclusive), so a wrapping export has no trailing
-      // from-clause to drop.
       if (!node.declaration) {
         ranges.push([node.start, node.end]);
         return;
       }
       ranges.push([node.start, node.declaration.start]);
-    } else if (node.type === 'ExportDefaultDeclaration') {
+    } else if (node.type === EXPORT_DEFAULT_DECLARATION) {
       ranges.push([node.start, node.declaration.start]);
     } else if (isRequireCall(node)) {
       ranges.push([node.start, node.end]);
@@ -551,28 +563,14 @@ function lineCount(source) {
   return source.endsWith('\n') ? newlines : newlines + 1;
 }
 
-// The duplication engine (upstream CPD-parity rework). Each pass indexes
-// every valid window by its joined code string and turns every bucket of
-// two or more positions into a candidate group whose occurrences extend
-// to the maximal extent they share (the longest common run around the
-// minTokens window). Candidates from both passes then compete in one
-// greedy selection; acceptGroups marks the tokens of the winners. Two
-// passes when local renaming is active (upstream 94299e0): raw lexemes
-// (Type-1) alongside the masked values (Type-2) — placeholder numbering
-// is first-use-per-scope, so the masked pass alone could miss exact
-// copies whose enclosing scopes shift the numbering.
+// The duplication engine (upstream CPD-parity rework).
 function detectClones(bags, opts) {
   const candidates = [];
   if (opts.ignoreLocals || opts.ignoreProperties) {
     candidates.push(...collectGroups(bags, opts, (t) => t.lexeme));
-    // Literal-masked raw pass: the same local names with different strings
-    // (`'/suggest?'` vs `'/lookup?'`) — placeholder numbering of the full
-    // masked pass can differ between two scopes and miss them.
     if (opts.ignoreLiterals) candidates.push(...collectGroups(bags, opts, (t) => t.literal));
   }
   candidates.push(...collectGroups(bags, opts, (t) => t.value));
-  // Longest clones first, then most occurrences, then position — the
-  // selection order that keeps reporting deterministic.
   candidates.sort(byPriority);
   return candidates;
 }
@@ -590,7 +588,7 @@ function collectGroups(bags, opts, codeOf) {
     if (positions.length >= 2) {
       const group = groupFromBucket(bags, positions, codes, minTokens, minLines);
       if (group) groups.push(group);
-      if (opts.pairwise) groups.push(...pairGroups(bags, positions, codes, opts, group));
+      if (opts.pairwise) groups.push(...pairGroups(bags, positions, codes, opts, group, extentOf));
     }
   }
   return groups;
@@ -610,14 +608,6 @@ function indexWindows(tokens, bagIndex, minTokens, minLines, occurrences, codes)
   }
 }
 
-// One candidate group from a bucket: [bagIndex, start, end) per occurrence.
-// Every position's window is extended against the first position's (the
-// reference) to the extent they share, then clipped to the common token
-// count; the reference is anchored at its own window and clipped to the
-// same length — it must not extend against itself, or it would grow over
-// the whole file. Dropped when the common span holds fewer than minLines
-// lines. Bucket keys are exact windows (string equality), so upstream's
-// collision re-verification has no JS counterpart.
 function groupFromBucket(bags, positions, codes, minTokens, minLines) {
   const [refBag, refStart] = positions[0];
   const refCodes = codes[refBag];
@@ -637,39 +627,6 @@ function groupFromBucket(bags, positions, codes, minTokens, minLines) {
   });
 }
 
-// --pairwise (jscpd-style pairs): a bucket of N>2 positions is clipped to the
-// span ALL of them share, so a long copy that also matches a short third
-// occurrence would be reported only as the short window. Every pair whose own
-// maximal extent is longer becomes its own two-occurrence candidate. Buckets
-// beyond MAX_PAIRWISE positions (boilerplate) skip this O(N^2) step.
-const MAX_PAIRWISE = 24;
-
-function pairGroups(bags, positions, codes, opts, group) {
-  if (positions.length < 3 || positions.length > MAX_PAIRWISE) return [];
-  const common = group ? group[0][2] - group[0][1] : opts.minTokens;
-  const out = [];
-  for (let i = 0; i < positions.length; i++) {
-    for (let j = i + 1; j < positions.length; j++) {
-      const pair = maximalPair(bags, positions[i], positions[j], codes, opts);
-      if (pair && pair[0][2] - pair[0][1] > common) out.push(pair);
-    }
-  }
-  return out;
-}
-
-// The maximal shared extent of two windows, or null when it self-overlaps
-// (a run repeating itself) or spans fewer than minLines lines.
-function maximalPair(bags, [b1, s1], [b2, s2], codes, { minTokens, minLines }) {
-  const [start2, end2] = extentOf(codes[b2], s2, codes[b1], s1, minTokens);
-  const left = s2 - start2;
-  const a = [b1, s1 - left, s1 - left + (end2 - start2)];
-  const b = [b2, start2, end2];
-  if (b1 === b2 && a[1] < b[2] && b[1] < a[2]) return null;
-  const toks = bags[b1].tokens;
-  if (toks[a[2] - 1].line - toks[a[1]].line + 1 < minLines) return null;
-  return [a, b];
-}
-
 // The reporting order: longest clones first, then most occurrences, then
 // first position.
 function byPriority(a, b) {
@@ -680,16 +637,12 @@ function byPriority(a, b) {
 }
 
 // Greedily accepts non-overlapping groups — PMD CPD Match semantics — and
-// marks their tokens duplicated; a group whose ANY occurrence overlaps an
-// already accepted range is dropped whole.
+// marks their tokens duplicated.
 function acceptGroups(bags, candidates, pairwise = false) {
   const accepted = [];
   const taken = new Map();
   for (const group of candidates) {
     const fresh = group.filter(([b, s, e]) => !overlaps(taken.get(b), s, e));
-    // CPD drops a group touching any accepted range; --pairwise keeps it when
-    // at least one occurrence is new (a fourth copy of a known clone is
-    // still a copy), marking only the new ranges.
     if (pairwise ? fresh.length === 0 : fresh.length < group.length) continue;
     for (const [b, s, e] of fresh) {
       if (!taken.has(b)) taken.set(b, []);
@@ -751,67 +704,8 @@ function clonesResult(bags, groups) {
   };
 }
 
-// Structured form of an accepted clone group (diff-scoped gates need the
-// occurrence ranges, not the message): `{ tokens, lines, occurrences:
-// [{ file, startLine, endLine }] }`. A group is clipped to the extent ALL its
-// occurrences share, so a third copy would shrink a long pair to the bare
-// window; each occurrence is therefore re-extended to the most it shares with
-// ANY other occurrence (pairwise, the way CPD/jscpd report clones).
-function cloneRecord(bags, group) {
-  const [refBag, refStart, refEnd] = group[0];
-  const ref = bags[refBag].tokens;
-  return {
-    tokens: refEnd - refStart,
-    lines: ref[refEnd - 1].line - ref[refStart].line + 1,
-    occurrences: group.map((occ, i) => {
-      const [b, s, e] = widenOccurrence(bags, group, i);
-      return { file: bags[b].rel, startLine: bags[b].tokens[s].line, endLine: bags[b].tokens[e - 1].line };
-    }),
-  };
-}
-
-// Token equality of the detector: masked value, or raw lexeme (the raw pass).
-function sameToken(a, b) {
-  return a.value === b.value || (a.lexeme !== undefined && a.lexeme === b.lexeme);
-}
-
-// How far [s, e) of occurrence `i` grows left and right while it still
-// matches at least one other occurrence of the group token for token.
-function widenOccurrence(bags, group, i) {
-  const [b, s, e] = group[i];
-  const mine = bags[b].tokens;
-  let left = 0;
-  let right = 0;
-  group.forEach(([ob, os, oe], j) => {
-    if (j === i) return;
-    const other = bags[ob].tokens;
-    let l = 0;
-    while (s - l > 0 && os - l > 0 && sameToken(mine[s - l - 1], other[os - l - 1])) l++;
-    let r = 0;
-    while (e + r < mine.length && oe + r < other.length && sameToken(mine[e + r], other[oe + r])) r++;
-    left = Math.max(left, l);
-    right = Math.max(right, r);
-  });
-  return clampToNeighbours(group, i, [b, s - left, e + right]);
-}
-
-// A widened occurrence must not grow into another occurrence of the same
-// group in the same file (a repeated table row would otherwise swallow its
-// neighbour and report one range overlapping itself).
-function clampToNeighbours(group, i, [b, s, e]) {
-  let start = s;
-  let end = e;
-  group.forEach(([ob, os, oe], j) => {
-    if (j === i || ob !== b) return;
-    if (oe <= group[i][1]) start = Math.max(start, oe);
-    if (os >= group[i][2]) end = Math.min(end, os);
-  });
-  return [b, start, end];
-}
-
 // The project-wide duplicated-line percentage over the scanned bags
-// (marked tokens' distinct lines vs total lines, 'NN.NN') — so a
-// clones-mode summary always carries a number too (upstream 0f54f0d).
+// (marked tokens' distinct lines vs total lines, 'NN.NN').
 function totalPercent(bags) {
   let checkedLines = 0;
   let dupLines = 0;

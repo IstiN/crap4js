@@ -118,5 +118,7 @@ export function weightSummary({ violations, checked }) {
  * exist.
  */
 export function runWeightOfClass(paths, ctx) {
+  const flag = paths.find((a) => a.startsWith('-'));
+  if (flag) throw new Error(`unknown flag: ${flag}`);
   return runCheck(ctx, gateFiles(paths, ctx.cwd), weightViolations, weightSummary, 'weight-of-class');
 }

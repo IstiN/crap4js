@@ -14,6 +14,8 @@ import { UTF8, toRelPath } from './files.js';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { extractMethods } from './complexity.js';
+import { isGateEnabled, resolvePathConfig } from './config.js';
+import { CRAP_GATE } from './constants.js';
 import { loadCoverage, coverageForMethod } from './coverage.js';
 import { diffIntersects } from './diffLines.js';
 import { crapScore } from './crapScore.js';
@@ -21,7 +23,7 @@ import { crapScore } from './crapScore.js';
 /**
  * Analyze a set of source files, combining complexity and coverage.
  *
- * @param {{ filePaths: string[], coveragePath: string|null, projectRoot: string, metric?: string, strict?: boolean, diffLines?: Map<string, Set<number>> }} opts
+ * @param {{ filePaths: string[], coveragePath: string|null, projectRoot: string, metric?: string, strict?: boolean, diffLines?: Map<string, Set<number>>, splitCallbacks?: boolean, explain?: boolean, config?: object }} opts
  *   `metric` selects the complexity scoring: `cyclomatic` (default) or
  *   `cognitive` (SonarSource v1.2); the chosen value feeds the CRAP formula.
  *   A coverage input that is missing, unparseable, or contains no records
@@ -34,10 +36,10 @@ import { crapScore } from './crapScore.js';
  * @returns {{ metrics: Array<object>, parseFailures: string[] }}
  *   Sorted MethodMetric array plus relative paths of files that failed to parse.
  */
-export function analyze({ filePaths, coveragePath, projectRoot, metric, strict, diffLines }) {
+export function analyze({ filePaths, coveragePath, projectRoot, metric, strict, diffLines, splitCallbacks, explain, config }) {
   const warn = (msg) => process.stderr.write(`Warning: ${msg}\n`);
   const coverageMap = loadCoverageMap(coveragePath, projectRoot);
-  const fileOpts = { metric, strict, diffLines };
+  const fileOpts = { metric, strict, diffLines, splitCallbacks, explain, config };
 
   const metrics = [];
   const parseFailures = [];
@@ -96,38 +98,66 @@ function inDiffSelection(diffLines, rel, methods) {
 
 function analyzeFile(file, projectRoot, coverageMap, warn, opts) {
   const rel = toRelPath(file, projectRoot);
-  let methods;
+  if (opts.config && !isGateEnabled(opts.config, rel, CRAP_GATE)) {
+    return { metrics: [], failures: [] };
+  }
+  const pathCfg = opts.config ? resolvePathConfig(opts.config, rel, { metric: opts.metric }) : null;
+  const fileMetric = pathCfg?.metric ?? opts.metric;
+  const methods = parseFileMethods(file, rel, fileMetric, opts, warn);
+  if (!methods) return { metrics: [], failures: [rel] };
+  const selected = inDiffSelection(opts.diffLines, rel, methods);
+  if (selected === null) return { metrics: [], failures: [] };
+  return {
+    metrics: mapFileMetrics(selected, rel, coverageMap, opts.strict, fileMetric, pathCfg),
+    failures: [],
+  };
+}
+
+function mapFileMetrics(methods, rel, coverageMap, strict, fileMetric, pathCfg) {
+  const fileCoverage = coverageMap ? coverageMap.get(rel) : null;
+  const uncovered = strict && coverageMap && !coverageMap.has(rel);
+  return methods.map((m) => buildMetric(m, rel, fileCoverage, uncovered, fileMetric, pathCfg));
+}
+
+function parseFileMethods(file, rel, fileMetric, opts, warn) {
   try {
-    methods = extractMethods(readFileSync(file, UTF8), {
+    return extractMethods(readFileSync(file, UTF8), {
       ext: path.extname(file),
-      metric: opts.metric,
+      metric: fileMetric,
+      splitCallbacks: opts.splitCallbacks,
+      explain: opts.explain,
     });
   } catch (e) {
     warn(`failed to parse ${rel}: ${e.message}`);
-    return { metrics: [], failures: [rel] };
+    return null;
   }
-  methods = inDiffSelection(opts.diffLines, rel, methods);
-  if (methods === null) return { metrics: [], failures: [] };
-  const fileCoverage = coverageMap ? coverageMap.get(rel) : null;
-  // Strict + no entry for a selected file: every function counts as 0.0%
-  // covered (CRAP computed) instead of N/A. A file WITH an entry keeps the
-  // no-intersecting-statements N/A for type-only functions.
-  const uncovered = opts.strict && coverageMap && !coverageMap.has(rel);
-  const metrics = methods.map((m) => {
-    const coverage = uncovered ? 0 : coverageForMethod(fileCoverage, m.startLine, m.endLine);
-    return {
-      methodName: m.name,
-      file: rel,
-      startLine: m.startLine,
-      endLine: m.endLine,
-      complexity: m.complexity,
-      coverage,
-      crapScore: crapScore(m.complexity, coverage),
-    };
-  });
-  return { metrics, failures: [] };
 }
 
+function buildMetric(m, rel, fileCoverage, uncovered, fileMetric, pathCfg) {
+  const coverage = uncovered ? 0 : coverageForMethod(fileCoverage, m.startLine, m.endLine);
+  const entry = {
+    methodName: m.name,
+    file: rel,
+    startLine: m.startLine,
+    endLine: m.endLine,
+    complexity: m.complexity,
+    coverage,
+    crapScore: crapScore(m.complexity, coverage),
+  };
+  if (fileMetric) entry.metric = fileMetric;
+  if (pathCfg?.threshold !== undefined) entry.threshold = pathCfg.threshold;
+  if (m.breakdown) entry.breakdown = m.breakdown;
+  return entry;
+}
+
+/**
+ * Comparator sorting MethodMetric rows by CRAP score descending, with N/A
+ * last and file+startLine tie-breaking.
+ *
+ * @param {object} a
+ * @param {object} b
+ * @returns {number}
+ */
 export function compareMetrics(a, b) {
   const aNull = a.crapScore == null;
   const bNull = b.crapScore == null;

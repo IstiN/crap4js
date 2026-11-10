@@ -104,5 +104,7 @@ export function classSizeSummary({ violations, checked }) {
  * The `class-size` command body. Returns exit code 2 iff violations exist.
  */
 export function runClassSize(paths, ctx) {
+  const flag = paths.find((a) => a.startsWith('-'));
+  if (flag) throw new Error(`unknown flag: ${flag}`);
   return runCheck(ctx, gateFiles(paths, ctx.cwd), classSizeViolations, classSizeSummary, 'class-size');
 }

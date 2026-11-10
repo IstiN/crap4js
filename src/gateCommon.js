@@ -33,7 +33,7 @@ export function applyGateArg(opts, arg, argv, i, valueFlags, numberFlags = null)
   const head = eq === -1 ? arg : arg.slice(0, eq);
   const key = valueFlags[head];
   if (!key) {
-    if (eq !== -1) throw new Error(`unknown flag: ${head}`);
+    if (arg.startsWith('-')) throw new Error(`unknown flag: ${head}`);
     opts.paths.push(arg);
     return i;
   }

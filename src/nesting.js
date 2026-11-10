@@ -97,5 +97,7 @@ export function nestingSummary({ violations, checked }) {
  * The `nesting` command body. Returns exit code 2 iff violations exist.
  */
 export function runNesting(paths, ctx) {
+  const flag = paths.find((a) => a.startsWith('-'));
+  if (flag) throw new Error(`unknown flag: ${flag}`);
   return runCheck(ctx, gateFiles(paths, ctx.cwd), nestingViolations, nestingSummary, 'nesting');
 }

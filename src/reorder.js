@@ -285,7 +285,7 @@ function parseReorderArgs(args) {
     else {
       // The throw exits, so its else was redundant — the fallback dedents
       // behind it, still guarded by this branch (collapsible-flow fix).
-      if (a.startsWith('--')) throw new Error(`Unknown flag: ${a}`);
+      if (a.startsWith('-')) throw new Error(`Unknown flag: ${a}`);
       out.paths.push(a);
     }
   }

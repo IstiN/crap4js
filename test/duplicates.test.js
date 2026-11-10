@@ -1068,10 +1068,61 @@ test('--ignore-properties: same code reading a different field is a clone', () =
   }
 });
 
-test('parseDuplicateArgs: --ignore-properties and --pairwise flags', () => {
-  const o = parseDuplicateArgs(['--ignore-properties', '--pairwise']);
+test('parseDuplicateArgs: --ignore-properties, --ignore-types, --ignore-data, and --pairwise flags', () => {
+  const o = parseDuplicateArgs(['--ignore-properties', '--ignore-types', '--ignore-data', '--pairwise']);
   assert.equal(o.ignoreProperties, true);
+  assert.equal(o.ignoreTypes, true);
+  assert.equal(o.ignoreData, true);
   assert.equal(o.pairwise, true);
+});
+
+test('--ignore-types skips TS type/interface/enum declarations (Issue #3)', () => {
+  const dto = `export interface UserDto {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  role: string;
+  active: boolean;
+}
+export type Status = 'a' | 'b' | 'c' | 'd' | 'e';
+export const keep = 1;
+`;
+  const vm = dto.replace('UserDto', 'UserViewModel');
+  const root = fixture({ 'src/dto.ts': dto, 'src/vm.ts': vm });
+  const files = [path.join(root, 'src/dto.ts'), path.join(root, 'src/vm.ts')];
+  const base = { threshold: 1, minTokens: 15, minLines: 3, report: 'clones', ignoreIdentifiers: true };
+  try {
+    assert.equal(duplicatesViolations(files, root, base).clones.length, 1);
+    assert.equal(duplicatesViolations(files, root, { ...base, ignoreTypes: true }).clones.length, 0);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--ignore-data skips pure literal data objects, arrays, and translation maps (Issue #3)', () => {
+  const makeI18n = (lang) => `export default {
+  'profile.title': '${lang}_title',
+  'profile.signOut': '${lang}_signOut',
+  'profile.confirm': '${lang}_confirm',
+  'profile.cancel': '${lang}_cancel',
+  'profile.retry': '${lang}_retry',
+  'profile.count': -1,
+  'profile.tags': ['a', 'b', \`plain\`],
+  nested: { ok: true, empty: null },
+} as const;
+export const FLAT = { A: '1', B: '2', C: '3', D: '4', E: '5' };
+`;
+  const root = fixture({ 'src/en.ts': makeI18n('en'), 'src/de.ts': makeI18n('de') });
+  const files = [path.join(root, 'src/en.ts'), path.join(root, 'src/de.ts')];
+  const base = { threshold: 1, minTokens: 15, minLines: 3, report: 'clones', ignoreLiterals: true };
+  try {
+    assert.ok(duplicatesViolations(files, root, base).clones.length > 0);
+    assert.equal(duplicatesViolations(files, root, { ...base, ignoreData: true }).clones.length, 0);
+  } finally {
+    cleanup(root);
+  }
 });
 
 // A long block copied twice plus a short third copy of its head: CPD-style

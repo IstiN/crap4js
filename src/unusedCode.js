@@ -102,6 +102,8 @@ export function unusedCodeSummary({ violations, checked }) {
  * set yields false positives — crap4dart 0.5.1 behavior).
  */
 export function runUnusedCode(paths, ctx) {
+  const flag = paths.find((a) => a.startsWith('-'));
+  if (flag) throw new Error(`unknown flag: ${flag}`);
   if (paths.length > 0) return skipPartialSelection(ctx);
   return runCheck(ctx, gateFiles([], ctx.cwd), unusedCodeViolations, unusedCodeSummary, 'unused-code');
 }

@@ -9,10 +9,12 @@
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { UTF8, gateFiles, toRelPath } from './files.js';
+import { UTF8, gateFiles, globToRegExp, toRelPath } from './files.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
 import { parseSource } from './complexity.js';
 import { collectImports, resolveImport } from './imports.js';
+
+export { globToRegExp } from './files.js';
 
 const RULE_FLAGS = { '--from': 'from', '--forbid': 'forbid', '--message': 'message' };
 
@@ -43,39 +45,6 @@ function validateCounts({ from, forbid, message }) {
   if (from.length !== forbid.length || message.length > from.length) {
     throw new Error('--from/--forbid must come in pairs; --message is optional per pair');
   }
-}
-
-/**
- * Compile a rule's glob into a RegExp (`*` matches within one path
- * segment, `**` across segments, `?` one character).
- *
- * @param {string} glob
- * @returns {RegExp}
- */
-export function globToRegExp(glob) {
-  let re = '';
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === '*') {
-      if (glob[i + 1] === '*') {
-        // `**/` also matches zero segments, so `**/test` hits `test`.
-        if (glob[i + 2] === '/') {
-          i += 2;
-          re += '(?:.*/)?';
-        } else {
-          i += 1;
-          re += '.*';
-        }
-      } else {
-        re += '[^/]*';
-      }
-    } else if (c === '?') {
-      re += '[^/]';
-    } else {
-      re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
-    }
-  }
-  return new RegExp(`^${re}$`);
 }
 
 /**

@@ -13,6 +13,8 @@
 // same-named functions (acceptable — those are rare and fail safe as "new").
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { OBJECT } from './constants.js';
+import { UTF8 } from './files.js';
 
 export const BASELINE_VERSION = 1;
 // Absorbs rounding/float noise only; any real change in complexity or coverage moves CRAP by more.
@@ -60,14 +62,26 @@ export function buildBaseline(metrics, threshold) {
   return { version: BASELINE_VERSION, maxCrap: round(max), functions: ordered };
 }
 
+/**
+ * Read and validate a baseline JSON file.
+ *
+ * @param {string} path
+ * @returns {object}
+ */
 export function readBaseline(path) {
-  const doc = JSON.parse(readFileSync(path, 'utf8'));
-  if (!doc || typeof doc.functions !== 'object') {
+  const doc = JSON.parse(readFileSync(path, UTF8));
+  if (!doc || typeof doc.functions !== OBJECT) {
     throw new Error(`Invalid baseline file ${path}: missing "functions"`);
   }
   return doc;
 }
 
+/**
+ * Write a baseline JSON document to disk.
+ *
+ * @param {string} path
+ * @param {object} doc
+ */
 export function writeBaseline(path, doc) {
   writeFileSync(path, JSON.stringify(doc, null, 2) + '\n');
 }

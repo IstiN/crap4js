@@ -26,9 +26,6 @@ const VALUE_FLAGS = { '--exclude': EXCLUDE };
 export function parseUnusedFilesArgs(argv) {
   const opts = { exclude: [], paths: [] };
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith('--') && !argv[i].includes('=') && !VALUE_FLAGS[argv[i]]) {
-      throw new Error(`unknown flag: ${argv[i]}`);
-    }
     i = applyGateArg(opts, argv[i], argv, i, VALUE_FLAGS);
   }
   return opts;

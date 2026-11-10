@@ -495,10 +495,6 @@ export function parseMemoryArgs(argv) {
   if (!Number.isInteger(opts.top) || opts.top < 1) {
     throw new Error(`Invalid --top: ${opts.top}`);
   }
-  // --badge-threshold needs no extra validation: it is a number flag,
-  // and applyGateArg's toGateNumber already rejects NaN and negatives.
-  const stray = opts.paths.find((p) => p.startsWith('--'));
-  if (stray) throw new Error(`unknown flag: ${stray}`);
   return opts;
 }
 

@@ -372,3 +372,102 @@ export function f(a, b, c) {
   // base 1 + 3 switch members + 3 || + 1 && = 8
   assert.equal(find(methods, 'f').complexity, 8);
 });
+
+test('nested named arrow function is reported separately and NOT double-counted in parent (Issue #1)', () => {
+  const src = `
+import { useCallback } from 'react';
+
+export const Mini = ({ a, b, c }: any) => {
+  const renderPart = () => (a && b ? 1 : 2);
+  const handlePress = useCallback(() => {
+    if (c) return 1;
+    return 2;
+  }, [c]);
+  return [renderPart, handlePress];
+};
+
+export function MiniDecl({ a, b }: any) {
+  function renderPart() {
+    return a && b ? 1 : 2;
+  }
+  return renderPart;
+}
+`;
+  const def = extractMethods(src, { ext: '.tsx' });
+  // Without --split-callbacks: renderPart is extracted separately (CC=3) and NOT double-counted in Mini;
+  // handlePress (useCallback) is not extracted and stays in Mini (1 + 1 = 2).
+  assert.equal(find(def, 'Mini').complexity, 2);
+  assert.equal(find(def, 'renderPart').complexity, 3);
+  assert.equal(find(def, 'MiniDecl').complexity, 1);
+
+  // With --split-callbacks: useCallback/useMemo/useEffect and object handlers are extracted as Parent.child!
+  const split = extractMethods(src, { ext: '.tsx', splitCallbacks: true });
+  assert.equal(find(split, 'Mini').complexity, 1);
+  assert.equal(find(split, 'Mini.renderPart').complexity, 3);
+  assert.equal(find(split, 'Mini.handlePress').complexity, 2);
+  assert.equal(find(split, 'MiniDecl').complexity, 1);
+  assert.equal(find(split, 'MiniDecl.renderPart').complexity, 3);
+});
+
+test('--split-callbacks extracts useCallback, useMemo, useEffect#N, and object property handlers', () => {
+  const src = `
+export const ProfileScreen = ({ user, isError, items, onRetry }) => {
+  const handleSignOut = React.useCallback(() => {
+    Alert.alert('Sign out?', '', [{
+      text: 'OK',
+      onPress: async () => {
+        try { await user.signOut(); }
+        catch (e) { console.warn(e); }
+      },
+    }]);
+  }, [user]);
+
+  const memoized = useMemo(() => (user ? user.name : 'guest'), [user]);
+
+  useEffect(() => {
+    if (isError) onRetry();
+  }, [isError]);
+
+  React.useLayoutEffect(function () {
+    if (!user) return;
+  }, [user]);
+
+  const renderItem = ({ item, index }) => (
+    <View>
+      {item.kind === 'link' ? <Chevron /> : item.kind === 'external' ? <ExternalIcon /> : null}
+      {index !== items.length - 1 && <Divider />}
+    </View>
+  );
+
+  const renderHeader = () => (
+    <View>
+      <Text>{user?.name || '-'}</Text>
+      {!isError && user?.email && <Text>{user.email}</Text>}
+    </View>
+  );
+
+  return (
+    <>
+      {isError ? <Retry onPress={() => a && b()} /> : <FlatList data={items} renderItem={renderItem} ListHeaderComponent={renderHeader} />}
+      {user && <Spinner />}
+    </>
+  );
+};
+`;
+  const split = extractMethods(src, { ext: '.tsx', splitCallbacks: true });
+  // ProfileScreen: base 1 + isError?: (1) + inline JSX lambda a&&b (1) + user&& (1) = 4
+  assert.equal(find(split, 'ProfileScreen').complexity, 4);
+  assert.equal(find(split, 'ProfileScreen.handleSignOut').complexity, 1);
+  assert.equal(find(split, 'ProfileScreen.handleSignOut.onPress').complexity, 2);
+  assert.equal(find(split, 'ProfileScreen.memoized').complexity, 2);
+  assert.equal(find(split, 'ProfileScreen.useEffect#1').complexity, 2);
+  assert.equal(find(split, 'ProfileScreen.useLayoutEffect#1').complexity, 2);
+  assert.equal(find(split, 'ProfileScreen.renderItem').complexity, 4);
+  assert.equal(find(split, 'ProfileScreen.renderHeader').complexity, 4);
+
+  // Also test cognitive with splitCallbacks
+  const splitCog = extractMethods(src, { ext: '.tsx', metric: 'cognitive', splitCallbacks: true });
+  assert.ok(find(splitCog, 'ProfileScreen').complexity < 10);
+  assert.equal(find(splitCog, 'ProfileScreen.useEffect#1').complexity, 1);
+});
+

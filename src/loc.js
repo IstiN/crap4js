@@ -9,11 +9,18 @@ import { readFileSync } from 'node:fs';
 import { UTF8, gateFiles, toRelPath } from './files.js';
 import { applyGateArg, runCheck } from './gateCommon.js';
 import { globToRegExp } from './bannedImports.js';
+import { isGateEnabled, loadConfig, resolvePathConfig } from './config.js';
+import { CONFIG_OPT, EXCLUDE, MAX_LINES_FLAG, MAX_LINES_OPT, OVERRIDE_OPT } from './constants.js';
 
-const MAX_LINES = 800;
+export const MAX_LINES = 800;
 
-const GATE_FLAGS = { '--max-lines': 'maxLines', '--exclude': 'exclude' };
-const NUMBER_FLAGS = new Set(['--max-lines']);
+const GATE_FLAGS = {
+  [MAX_LINES_FLAG]: MAX_LINES_OPT,
+  '--exclude': EXCLUDE,
+  '--config': CONFIG_OPT,
+  '--override': OVERRIDE_OPT,
+};
+const NUMBER_FLAGS = new Set([MAX_LINES_FLAG]);
 
 /**
  * Physical line count: `split('\n')` with the trailing empty element
@@ -34,20 +41,22 @@ export function lineCount(content) {
  *
  * @param {string[]} files  absolute paths.
  * @param {string} projectRoot
- * @param {{ maxLines?: number, exclude?: string[] }} [opts]
+ * @param {{ maxLines?: number, exclude?: string[], configObj?: object }} [opts]
  * @returns {{violations: Array<{file, message}>, checked: number}}
  */
-export function locViolations(files, projectRoot, { maxLines = MAX_LINES, exclude = [] } = {}) {
+export function locViolations(files, projectRoot, { maxLines = MAX_LINES, exclude = [], configObj = null } = {}) {
   const globs = exclude.map(globToRegExp);
   const violations = [];
   let checked = 0;
   for (const file of files) {
     const rel = toRelPath(file, projectRoot);
     if (globs.some((g) => g.test(rel))) continue;
+    if (configObj && !isGateEnabled(configObj, rel, 'loc')) continue;
+    const limit = configObj ? (resolvePathConfig(configObj, rel, { maxLines }).maxLines ?? maxLines) : maxLines;
     checked++;
     const lines = lineCount(readFileSync(file, UTF8));
-    if (lines > maxLines) {
-      violations.push({ file: rel, message: `${lines} lines > max ${maxLines}` });
+    if (lines > limit) {
+      violations.push({ file: rel, message: `${lines} lines > max ${limit}` });
     }
   }
   return { violations, checked };
@@ -64,13 +73,13 @@ export function locSummary({ violations, checked }, maxLines = MAX_LINES) {
 }
 
 /**
- * Parse `loc` arguments into `{ maxLines, exclude, paths }`. Unknown flags
- * and non-integer maxima are usage errors.
+ * Parse `loc` arguments into `{ maxLines, exclude, config, override, paths }`.
+ * Unknown flags and non-integer maxima are usage errors.
  *
  * @param {string[]} argv
  */
 export function parseLocArgs(argv) {
-  const opts = { maxLines: MAX_LINES, exclude: [], paths: [] };
+  const opts = { maxLines: MAX_LINES, exclude: [], config: undefined, override: [], paths: [] };
   for (let i = 0; i < argv.length; i++) {
     i = applyGateArg(opts, argv[i], argv, i, GATE_FLAGS, NUMBER_FLAGS);
   }
@@ -85,10 +94,11 @@ export function parseLocArgs(argv) {
  */
 export function runLoc(argv, ctx) {
   const opts = parseLocArgs(argv);
+  const configObj = loadConfig(ctx.cwd, { configPath: opts.config, overrides: opts.override });
   return runCheck(
     ctx,
     gateFiles(opts.paths, ctx.cwd),
-    (files, root) => locViolations(files, root, opts),
+    (files, root) => locViolations(files, root, { ...opts, configObj }),
     (r) => locSummary(r, opts.maxLines),
     'loc',
   );

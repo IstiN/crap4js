@@ -67,7 +67,8 @@ export function formatReport(metrics, { threshold, parseFailures, metric } = {})
   // carried a `>` -> `>=` mutant no test can distinguish — overwriting the
   // accumulator with an equal value is unobservable.
   const max = sorted.reduce((mx, m) => Math.max(mx, m.crapScore ?? 0), 0);
-  const verdict = max > t ? 'FAILED' : 'passed';
+  const failed = sorted.some((m) => m.crapScore != null && m.crapScore > (m.threshold ?? t));
+  const verdict = failed ? 'FAILED' : 'passed';
   out += '\n';
   out += `Max CRAP: ${max.toFixed(1)} (threshold ${t.toFixed(1)}) — ${verdict}\n`;
   out += parseFailureLine(parseFailures);
