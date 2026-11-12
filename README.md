@@ -1208,6 +1208,25 @@ summary either. One `file: N lines > max M` line per violation plus a
 summary; exit 2 iff violations exist. Findings honor ignore markers
 (`// ignore:loc`).
 
+## `module-size`
+
+`crap4js module-size [--max-lines N] [--max-functions N] [--exclude GLOB]... [--baseline FILE [--write-baseline]] [paths...]`
+fails modules longer than N physical lines (default 800) or declaring more
+than N top-level functions (default 40: Program-level function declarations,
+export-wrapped ones, and top-level variables initialized with a function or
+arrow). With `--baseline FILE` it is a ratchet: modules pinned in FILE
+(`{"modules": {"<rel>": {"lines": N, "functions": N}}}`) fail only when they
+grow above their pin, unpinned modules are held to the limits, and shrinking
+modules print `improved`. `--write-baseline` pins the current offenders.
+Exit 2 iff violations exist; honors `// ignore:module-size`.
+
+## `--require-coverage`
+
+On the CRAP command, `--require-coverage` exits 2 when any analyzed function
+has no CRAP score (N/A: its file has no coverage entry or failed to parse),
+listing each file. Without it such functions are skipped by the threshold
+and the `--baseline` ratchet.
+
 ## `method-size`
 
 `crap4js method-size [--max-lines N] [--max-params N] [paths...]` (port of
