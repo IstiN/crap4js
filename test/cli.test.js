@@ -659,3 +659,52 @@ test('--exclude drops files matching the project-relative glob (repeatable)', ()
     cleanup(root);
   }
 });
+
+// --- --require-coverage: N/A functions fail instead of being skipped ---
+
+function requireCoverageProject() {
+  return buildProject({
+    source: path.join(FIXTURES, 'sample.js'),
+    coverage: (sourcePath) => ({
+      [sourcePath]: {
+        statementMap: { '0': { start: { line: 4, column: 0 }, end: { line: 7, column: 1 } } },
+        s: { '0': 1 },
+      },
+    }),
+  });
+}
+
+test('without --require-coverage a function with N/A coverage passes silently', () => {
+  const root = requireCoverageProject();
+  try {
+    const r = runCli(root, []);
+    assert.equal(r.status, 0, `stderr: ${r.stderr}`);
+    assert.match(r.stdout, /N\/A/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--require-coverage exits 2 and names files with N/A functions', () => {
+  const root = requireCoverageProject();
+  try {
+    const r = runCli(root, ['--require-coverage']);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /no CRAP: src\/sample\.js — \d+ function\(s\) without coverage/);
+    assert.match(r.stderr, /--require-coverage failed/);
+  } finally {
+    cleanup(root);
+  }
+});
+
+test('--require-coverage exits 2 on a file that fails to parse', () => {
+  const root = requireCoverageProject();
+  try {
+    writeFileSync(path.join(root, 'src', 'broken.js'), 'function a( {\n');
+    const r = runCli(root, ['--require-coverage', 'src/broken.js']);
+    assert.equal(r.status, 2);
+    assert.match(r.stderr, /no CRAP: src\/broken\.js failed to parse/);
+  } finally {
+    cleanup(root);
+  }
+});

@@ -146,6 +146,7 @@ import { runIdenticalBranches } from './identicalBranches.js';
 import { runCollapsibleFlow } from './collapsibleFlow.js';
 import { runNonNullAssertion } from './nonNullAssertion.js';
 import { runLoc } from './loc.js';
+import { runModuleSize } from './moduleSize.js';
 import { runMethodSize } from './methodSize.js';
 import { runComponentSize } from './componentSize.js';
 import { runPublicDocs } from './publicDocs.js';
@@ -203,6 +204,8 @@ const USAGE_TEXT = [
   '  crap4js --strict         Selected files with no coverage entry count as',
   '                           0.0% covered instead of N/A, and explicit',
   '                           paths must exist (exit 1 otherwise)',
+  '  crap4js --require-coverage  Fail (exit 2) when any analyzed function has',
+  '                           no CRAP score (N/A coverage or a parse failure)',
   '  crap4js --exclude GLOB   Skip files whose project-relative path matches',
   '                           GLOB (repeatable)',
   '  crap4js --baseline <f>   Ratchet: fail if any function\'s CRAP grew vs the baseline',
@@ -345,6 +348,11 @@ const USAGE_TEXT = [
   '                           Fail files longer than N lines (default',
   '                           800); --exclude drops files from the',
   '                           check entirely.',
+  '  crap4js module-size [--max-lines N] [--max-functions N] [--exclude GLOB]...',
+  '                     [--baseline FILE [--write-baseline]] [paths...]',
+  '                           Fail modules over N lines (default 800) or N',
+  '                           top-level functions (default 40); --baseline',
+  '                           pins current offenders, which may only shrink.',
   '  crap4js method-size [--max-lines N] [--max-params N] [paths...]',
   '                           Fail methods longer than N body lines',
   '                           (default 60) or with more than N params',
@@ -405,6 +413,7 @@ const SUBCOMMANDS = {
   'collapsible-flow': (args, ctx) => runCollapsibleFlow(args, ctx),
   'non-null-assertion': (args, ctx) => runNonNullAssertion(args, ctx),
   loc: (args, ctx) => runLoc(args, ctx),
+  'module-size': (args, ctx) => runModuleSize(args, ctx),
   'method-size': (args, ctx) => runMethodSize(args, ctx),
   'component-size': (args, ctx) => runComponentSize(args, ctx),
   'public-docs': (args, ctx) => runPublicDocs(args, ctx),
@@ -420,6 +429,7 @@ const SIMPLE_FLAGS = {
   '--changed': 'changed',
   '--run-tests': 'runTests',
   '--strict': 'strict',
+  '--require-coverage': 'requireCoverage',
   '--write-baseline': 'writeBaseline',
   '--update-baseline': 'updateBaseline',
   '--split-callbacks': SPLIT_CALLBACKS_OPT,
@@ -459,6 +469,7 @@ function newOpts() {
     runTests: false,
     diffBase: undefined,
     strict: false,
+    requireCoverage: false,
     exclude: [],
     baseline: undefined,
     writeBaseline: false,
@@ -621,8 +632,28 @@ function renderAndVerdict(result, opts, inputs, ctx) {
     }),
   );
   if (opts.explain) writeExplanations(result.metrics, opts.metricValue, ctx);
-  if (opts.baseline) return baselineVerdict(result.metrics, opts, ctx);
-  return reportVerdict(result.metrics, opts.thresholdValue, ctx);
+  const gap = opts.requireCoverage ? coverageGapVerdict(result, ctx) : 0;
+  const verdict = opts.baseline
+    ? baselineVerdict(result.metrics, opts, ctx)
+    : reportVerdict(result.metrics, opts.thresholdValue, ctx);
+  return verdict || gap;
+}
+
+// --require-coverage: a function without a CRAP score (no coverage entry for
+// its file, or a file that failed to parse) is invisible to every threshold
+// and ratchet check. Fail instead of silently skipping it.
+function coverageGapVerdict(result, ctx) {
+  const missing = result.metrics.filter((m) => m.crapScore == null);
+  const files = [...new Set(missing.map((m) => m.file))].sort();
+  const failures = result.parseFailures ?? [];
+  if (files.length === 0 && failures.length === 0) return 0;
+  for (const f of failures) ctx.err.write(`no CRAP: ${f} failed to parse\n`);
+  for (const f of files) {
+    const n = missing.filter((m) => m.file === f).length;
+    ctx.err.write(`no CRAP: ${f} — ${n} function(s) without coverage\n`);
+  }
+  ctx.err.write(`--require-coverage failed: ${missing.length} function(s) in ${files.length} file(s) have no CRAP score, ${failures.length} parse failure(s).\n`);
+  return 2;
 }
 
 function writeExplanations(metrics, defaultMetric, ctx) {

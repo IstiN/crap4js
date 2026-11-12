@@ -47,6 +47,7 @@ export const IGNORABLE_GATES = new Set([
   'loc',
   'magic-constants',
   METHOD_SIZE_GATE,
+  'module-size',
   'nesting',
   NON_NULL_ASSERTION_GATE,
   'public-docs',
