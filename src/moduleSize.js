@@ -87,17 +87,27 @@ export function measureModule(source, ext) {
  * Verdict for one module against the limits and its optional pin.
  * Returns `{ violation?: string, improved?: string }`.
  */
-export function judgeModule(size, pin, { maxLines, maxFunctions }) {
-  const limL = pin ? Math.max(pin.lines, maxLines) : maxLines;
-  const limF = pin ? Math.max(pin.functions, maxFunctions) : maxFunctions;
-  const over = [];
-  if (size.lines > limL) over.push(`${size.lines} lines > max ${limL}`);
-  if (size.functions > limF) over.push(`${size.functions} top-level functions > max ${limF}`);
+export function judgeModule(size, pin, limits) {
+  const over = overLimits(size, pinnedLimits(pin, limits));
   if (over.length) return { violation: (pin ? 'grew above pin: ' : '') + over.join(', ') };
-  if (pin && (size.lines < pin.lines || size.functions < pin.functions)) {
-    return { improved: `${size.lines}/${size.functions} below pin ${pin.lines}/${pin.functions}` };
-  }
-  return {};
+  return shrankBelow(size, pin) ? { improved: `${size.lines}/${size.functions} below pin ${pin.lines}/${pin.functions}` } : {};
+}
+
+// Effective limits: a pin can only raise a limit, never lower it.
+function pinnedLimits(pin, { maxLines, maxFunctions }) {
+  if (!pin) return { maxLines, maxFunctions };
+  return { maxLines: Math.max(pin.lines, maxLines), maxFunctions: Math.max(pin.functions, maxFunctions) };
+}
+
+function overLimits(size, { maxLines, maxFunctions }) {
+  const over = [];
+  if (size.lines > maxLines) over.push(`${size.lines} lines > max ${maxLines}`);
+  if (size.functions > maxFunctions) over.push(`${size.functions} top-level functions > max ${maxFunctions}`);
+  return over;
+}
+
+function shrankBelow(size, pin) {
+  return Boolean(pin) && (size.lines < pin.lines || size.functions < pin.functions);
 }
 
 /**
