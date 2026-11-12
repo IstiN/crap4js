@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.35.0](https://github.com/IstiN/crap4js/compare/v0.34.0...v0.35.0) (2026-11-12)
+
+
+### Features
+
+* module-size gate with baseline ratchet; --require-coverage fails on N/A CRAP ([#8](https://github.com/IstiN/crap4js/issues/8)) ([2d99360](https://github.com/IstiN/crap4js/commit/2d99360df25cec4c7e713801eb2f6e7ebc7495fb))
+
 ## [0.32.0](https://github.com/vabhzw17eg2qu4m9-bit/crap4js/compare/v0.31.0...v0.32.0) (2026-11-09)
 
 
